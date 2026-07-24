@@ -1,5 +1,5 @@
 ---
-name: harness-branching
+name: branching
 description: Manage the one-branch-per-sprint Git workflow for the Claude + Codex sprint harness. Use when a sprint needs a dedicated branch, when unattended mode must track active_branch/base_branch, when retries must stay on the same sprint branch, or when deciding whether a sprint branch is ready to merge after SPRINT PASS.
 ---
 
@@ -12,7 +12,7 @@ This skill covers:
 - creating a branch for a new sprint
 - switching to the correct sprint branch
 - keeping retries on the same sprint branch
-- recording `active_branch` and `base_branch` in `.sprintfoundry/state/run-state.json`
+- recording `active_branch` and `base_branch` in `run-state.json`
 - deciding when a sprint branch is ready to merge
 
 This skill is for harness Git workflow, not for product code.
@@ -45,7 +45,7 @@ Use a short slug derived from the sprint title in `planner-spec.json`.
 Read:
 
 - `planner-spec.json`
-- `.sprintfoundry/state/run-state.json` if present
+- `run-state.json` if present
 - current Git branch
 
 Determine:
@@ -63,7 +63,7 @@ Before implementation:
 - if it exists, switch to it
 - confirm `git branch --show-current` matches the target branch
 
-If unattended mode is active, update `.sprintfoundry/state/run-state.json`:
+If unattended mode is active, update `run-state.json`:
 
 - `active_branch`
 - `base_branch`
@@ -83,37 +83,15 @@ When the next sprint starts:
 
 - create a new branch
 - do not reuse the previous sprint branch
-- update `.sprintfoundry/state/run-state.json` to the new branch
+- update `run-state.json` to the new branch
 
-### 5. Merge readiness and execution
+### 5. Merge readiness
 
 A sprint branch is merge-ready only when:
 
 - the evaluator result for that sprint is `SPRINT PASS`
 - the branch still corresponds to the same sprint scope
 - there is no unresolved pause or escalation state
-
-Merge is executed automatically by the Orchestrator (Rule 2 SPRINT PASS handler) — not manually.
-
-**Merge command:**
-
-```bash
-git checkout <base_branch>
-git merge --no-ff <sprint_branch> -m "merge: sprint-N (<sprint_branch>) → <base_branch> after SPRINT PASS"
-```
-
-**Git lock recovery:** Before each merge attempt, remove stale lock files:
-
-```bash
-rm -f .git/index.lock .git/MERGE_HEAD .git/CHERRY_PICK_HEAD
-```
-
-These are left by crashed git processes and are safe to delete when no git operation is actively running.
-
-**Merge failure handling:**
-- Orchestrator retries up to 3 times (5 s / 10 s / 15 s backoff).
-- If all retries fail: `needs_human=true` is set in `.sprintfoundry/state/run-state.json` with the exact recovery command.
-- Sprint code is NOT lost — it remains on the sprint branch until the merge is completed.
 
 If a sprint is re-planned instead of completed:
 
@@ -123,7 +101,7 @@ If a sprint is re-planned instead of completed:
 ## Output rules
 
 - Prefer explicit branch naming over implicit current-branch assumptions
-- Keep branch state synchronized with `.sprintfoundry/state/run-state.json`
+- Keep branch state synchronized with `run-state.json`
 - Never implement a new sprint directly on `main`
 - Never merge a sprint branch before evaluator approval
 - Never create multiple concurrent branches for the same sprint unless the harness explicitly introduces parallel sprint execution

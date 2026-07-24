@@ -7,7 +7,7 @@ short and operational. Full background lives in `docs/protocol.md`.
 
 | Agent | Runtime | Responsibility |
 | --- | --- | --- |
-| Orchestrator | **Plugin skill** `sprintfoundry-orchestrator` | Routes by file state; entry point for all user requests. |
+| Orchestrator | **Plugin skill** `sf-orchestrator` | Routes by file state; entry point for all user requests. |
 | Planner | Claude sub-agent | Writes `planner-spec.json`, `init.sh`, and initial `.sprintfoundry/claude-progress.txt`. |
 | Generator | Codex CLI | Implements exactly one approved sprint and writes a commit request. |
 | Evaluator | Claude sub-agent | Reviews contracts and runs independent black-box CHECK. |

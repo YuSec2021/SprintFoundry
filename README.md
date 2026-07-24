@@ -7,7 +7,7 @@ SprintFoundry is a Claude Code plugin for AI-driven software delivery. It packag
 This repository is now primarily a plugin source and release repository. The canonical runtime entrypoint is the plugin skill:
 
 ```text
-sprintfoundry-orchestrator
+sf-orchestrator
 ```
 
 The older root-level harness files and scripts remain as development references, tests, and compatibility scaffolding, but published users should consume the complete plugin under `plugins/sprintfoundry`.
@@ -23,7 +23,7 @@ plugins/sprintfoundry/
 │   ├── generator.md
 │   └── planner.md
 └── skills/
-    ├── sprintfoundry-orchestrator/
+    ├── sf-orchestrator/
     │   ├── SKILL.md
     │   └── references/
     │       ├── evaluator-agent.md
@@ -32,9 +32,9 @@ plugins/sprintfoundry/
     │       ├── protocol.md
     │       ├── quality-gate.md
     │       └── version-updates.md
-    ├── harness-branching/
+    ├── branching/
     │   └── SKILL.md
-    └── harness-observability/
+    └── observability/
         ├── SKILL.md
         └── references/
 ```
@@ -48,12 +48,12 @@ The plugin contains:
 
 | Component | Purpose |
 | --- | --- |
-| `sprintfoundry-orchestrator` skill | Main user-facing coordinator and routing engine |
+| `sf-orchestrator` skill | Main user-facing coordinator and routing engine |
 | `planner` agent | Expands a short request into `planner-spec.json`, `init.sh`, and sprint plan |
 | `generator` agent doc | Mirrors the Codex Generator contract for human review; actual implementation runs through Codex CLI |
 | `evaluator` agent | Reviews sprint contracts and performs independent black-box verification |
-| `harness-branching` skill | One-branch-per-sprint workflow and active branch recovery |
-| `harness-observability` skill | Run state, event logs, pause/escalation summaries, and context hygiene |
+| `branching` skill | One-branch-per-sprint workflow and active branch recovery |
+| `observability` skill | Run state, event logs, pause/escalation summaries, and context hygiene |
 
 ## Runtime Model
 
@@ -64,7 +64,7 @@ SprintFoundry uses a strict separation of responsibility:
 | Planner | Claude sub-agent | Classifies scope, then turns a request into product direction, verification mode, and sprint plan |
 | Generator | Codex CLI | Implements one approved sprint, self-checks, and writes a commit request |
 | Evaluator | Claude sub-agent + verification tools | Reviews contracts and verifies committed work through the configured external surface |
-| Orchestrator | `sprintfoundry-orchestrator` skill | Reads file state, invokes agents, owns Git commits and `.sprintfoundry/signals/eval-trigger.txt`, and pauses on unsafe state |
+| Orchestrator | `sf-orchestrator` skill | Reads file state, invokes agents, owns Git commits and `.sprintfoundry/signals/eval-trigger.txt`, and pauses on unsafe state |
 
 Important boundaries:
 
@@ -80,7 +80,7 @@ Important boundaries:
 
 ```mermaid
 flowchart TD
-    A["User request / continue sprint"] --> O["sprintfoundry-orchestrator"]
+    A["User request / continue sprint"] --> O["sf-orchestrator"]
     O --> S["Read current file state"]
     S --> P{"planner-spec.json exists?"}
     P -- no --> SC["Planner writes .sprintfoundry/state/scope-classification.json"]
@@ -314,7 +314,7 @@ zipinfo -1 sprintfoundry.plugin
 
 ## Usage In A Target Project
 
-After installing the plugin, invoke `sprintfoundry-orchestrator` from Claude Code when you want to:
+After installing the plugin, invoke `sf-orchestrator` from Claude Code when you want to:
 
 - start a new AI-driven project
 - continue the next sprint

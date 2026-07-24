@@ -40,7 +40,7 @@ done
 
 # The orchestrator skill ships copies of the harness scripts (the plugin is
 # installed from this directory by the marketplace). They must match scripts/.
-SKILL_SCRIPTS="$ROOT/plugins/sprintfoundry/skills/sprintfoundry-orchestrator/scripts"
+SKILL_SCRIPTS="$ROOT/plugins/sprintfoundry/skills/sf-orchestrator/scripts"
 for s in orchestrate.py run-codex.sh harness-log.py; do
     if [[ ! -f "$SKILL_SCRIPTS/$s" ]] || ! cmp -s "$ROOT/scripts/$s" "$SKILL_SCRIPTS/$s"; then
         if [[ "$FIX" == "--fix" ]]; then

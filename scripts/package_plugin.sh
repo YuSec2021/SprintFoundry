@@ -73,7 +73,7 @@ bash "$SCRIPT_DIR/check-agent-sync.sh" || {
 # ── Ship harness scripts with the orchestrator skill ─────────────────────────
 # The plugin is the only thing installed in target projects; orchestrate.py is
 # the single source of truth for routing, so it must travel with the skill.
-SKILL_SCRIPTS="$PLUGIN_SRC/skills/sprintfoundry-orchestrator/scripts"
+SKILL_SCRIPTS="$PLUGIN_SRC/skills/sf-orchestrator/scripts"
 mkdir -p "$SKILL_SCRIPTS"
 for s in orchestrate.py run-codex.sh harness-log.py; do
   cp "$SCRIPT_DIR/$s" "$SKILL_SCRIPTS/$s"

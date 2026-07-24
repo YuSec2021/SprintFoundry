@@ -1,5 +1,5 @@
 ---
-name: sprintfoundry-orchestrator
+name: sf-orchestrator
 description: >
   Orchestrates the SprintFoundry three-agent GAN harness (Planner → Generator →
   Evaluator) for any software project. Invoke this skill whenever the user wants

@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL = ROOT / "plugins" / "sprintfoundry" / "skills" / "sprintfoundry-orchestrator" / "SKILL.md"
+SKILL = ROOT / "plugins" / "sprintfoundry" / "skills" / "sf-orchestrator" / "SKILL.md"
 
 
 def extract_version_bump_script() -> str:

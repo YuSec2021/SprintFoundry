@@ -1,5 +1,5 @@
 ---
-name: harness-observability
+name: observability
 description: Maintain observability, unattended loop state, escalation summaries, and context-compaction artifacts for the Claude + Codex sprint harness. Use when the harness needs structured run-state updates, append-only event logs, routing audit logs, human handoff summaries, or pause/retry decisions for unattended execution.
 ---
 

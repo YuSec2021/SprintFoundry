@@ -12,12 +12,12 @@ sprintfoundry/
 │   ├── .claude-plugin/
 │   │   └── plugin.json           # Plugin manifest
 │   ├── skills/
-│   │   ├── sprintfoundry-orchestrator/  # Entry-point skill (routes, coordinates)
+│   │   ├── sf-orchestrator/      # Entry-point skill (routes, coordinates)
 │   │   │   ├── SKILL.md
 │   │   │   ├── references/       # 6 reference docs loaded on demand
 │   │   │   └── scripts/          # Copied in by package_plugin.sh (do not edit)
-│   │   ├── harness-branching/    # Git branch lifecycle skill
-│   │   └── harness-observability/ # Audit log skill
+│   │   ├── branching/            # Git branch lifecycle skill
+│   │   └── observability/        # Audit log skill
 │   └── agents/                   # Sub-agents called by the orchestrator skill
 │       ├── planner.md
 │       ├── evaluator.md
@@ -62,7 +62,7 @@ automatically by `orchestrate.py`.
 
 | Role | Runtime | Invocation |
 | --- | --- | --- |
-| Orchestrator | **Plugin skill** `sprintfoundry-orchestrator` | Triggered by user |
+| Orchestrator | **Plugin skill** `sf-orchestrator` | Triggered by user |
 | Planner | Claude sub-agent | `Agent(subagent_type="planner", ...)` |
 | Generator | Codex CLI | `bash scripts/run-codex.sh <prompt> <log>` |
 | Evaluator | Claude sub-agent | `Agent(subagent_type="evaluator", ...)` |
@@ -94,7 +94,7 @@ python3 -m pytest -q                        # routing behavior tests
 ```
 
 Routing logic lives **only** in `scripts/orchestrate.py`.
-`plugins/sprintfoundry/skills/sprintfoundry-orchestrator/SKILL.md` is a thin
+`plugins/sprintfoundry/skills/sf-orchestrator/SKILL.md` is a thin
 shell that runs it and maps actions to agent invocations — never re-implement
 routing rules inline there.
 

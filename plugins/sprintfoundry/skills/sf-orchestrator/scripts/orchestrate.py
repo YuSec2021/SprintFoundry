@@ -2,7 +2,7 @@
 """State-driven orchestrator for planning, iteration, and bugfix flows.
 
 This script is the SINGLE SOURCE OF TRUTH for routing decisions. The
-sprintfoundry-orchestrator skill must call it and act on its JSON output
+sf-orchestrator skill must call it and act on its JSON output
 instead of maintaining a second inline implementation.
 
 Layout (v2, partitioned):

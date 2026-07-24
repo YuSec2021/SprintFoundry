@@ -7,7 +7,7 @@ SprintFoundry 是一个面向 AI 软件交付的 Claude Code plugin。它封装�
 这个仓库现在主要是 plugin 源码与发布仓库。标准运行入口是 plugin skill：
 
 ```text
-sprintfoundry-orchestrator
+sf-orchestrator
 ```
 
 旧的根目录 harness 文件和脚本继续保留，用于开发参考、测试和兼容；正式发布与安装时，应消费 `plugins/sprintfoundry` 下的完整 plugin。
@@ -23,7 +23,7 @@ plugins/sprintfoundry/
 │   ├── generator.md
 │   └── planner.md
 └── skills/
-    ├── sprintfoundry-orchestrator/
+    ├── sf-orchestrator/
     │   ├── SKILL.md
     │   └── references/
     │       ├── evaluator-agent.md
@@ -32,9 +32,9 @@ plugins/sprintfoundry/
     │       ├── protocol.md
     │       ├── quality-gate.md
     │       └── version-updates.md
-    ├── harness-branching/
+    ├── branching/
     │   └── SKILL.md
-    └── harness-observability/
+    └── observability/
         ├── SKILL.md
         └── references/
 ```
@@ -48,12 +48,12 @@ plugin 内包含：
 
 | 组件 | 作用 |
 | --- | --- |
-| `sprintfoundry-orchestrator` skill | 面向用户的主协调器和路由引擎 |
+| `sf-orchestrator` skill | 面向用户的主协调器和路由引擎 |
 | `planner` agent | 把短需求扩展成 `planner-spec.json`、`init.sh` 和 sprint 计划 |
 | `generator` agent 文档 | 镜像 Codex Generator 契约，便于人工审阅；真实实现仍由 Codex CLI 执行 |
 | `evaluator` agent | 审核 sprint contract，并做独立黑盒验证 |
-| `harness-branching` skill | 每个 sprint 一条分支，以及 active branch 恢复 |
-| `harness-observability` skill | 运行状态、事件日志、暂停/人工接管摘要、上下文清洁 |
+| `branching` skill | 每个 sprint 一条分支，以及 active branch 恢复 |
+| `observability` skill | 运行状态、事件日志、暂停/人工接管摘要、上下文清洁 |
 
 ## 运行模型
 
@@ -64,7 +64,7 @@ SprintFoundry 有严格的职责边界：
 | Planner | Claude sub-agent | 先判定项目规模，再将需求转成产品方向、验证模式和 sprint 计划 |
 | Generator | Codex CLI | 实现一个已批准 sprint，自检，并写入 commit request |
 | Evaluator | Claude sub-agent + 验证工具 | 审核 contract，并通过配置的外部表面验证已提交工作 |
-| Orchestrator | `sprintfoundry-orchestrator` skill | 读取文件状态、调用代理、负责 Git commit 和 `.sprintfoundry/signals/eval-trigger.txt`，并在不安全状态下暂停 |
+| Orchestrator | `sf-orchestrator` skill | 读取文件状态、调用代理、负责 Git commit 和 `.sprintfoundry/signals/eval-trigger.txt`，并在不安全状态下暂停 |
 
 关键边界：
 
@@ -80,7 +80,7 @@ SprintFoundry 有严格的职责边界：
 
 ```mermaid
 flowchart TD
-    A["用户请求 / 继续 sprint"] --> O["sprintfoundry-orchestrator"]
+    A["用户请求 / 继续 sprint"] --> O["sf-orchestrator"]
     O --> S["读取当前文件状态"]
     S --> P{"planner-spec.json 存在?"}
     P -- 否 --> SC["Planner 写 .sprintfoundry/state/scope-classification.json"]
@@ -313,7 +313,7 @@ zipinfo -1 sprintfoundry.plugin
 
 ## 在目标项目中使用
 
-安装 plugin 后，当你需要以下能力时，在 Claude Code 中调用 `sprintfoundry-orchestrator`：
+安装 plugin 后，当你需要以下能力时，在 Claude Code 中调用 `sf-orchestrator`：
 
 - 启动新的 AI 驱动项目
 - 继续下一个 sprint
