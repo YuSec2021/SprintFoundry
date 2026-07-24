@@ -35,6 +35,8 @@ State lives on disk, not in chat memory.
 | `.sprintfoundry/state/scope-classification.json` | Planner | Planning scale: `standard` or `large_system`, with evidence and epic outline. |
 | `planner-spec.json` | Planner | Product spec, sprint list, tech stack, verification mode. |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint definition of done. Must be approved before code. |
+| `spec-delta.md` | Generator | This sprint's ADDED/MODIFIED/REMOVED requirements for one capability. Merged into the living spec on PASS, then archived. |
+| `specs/<capability>/spec.md` | Orchestrator (merged) | **Living spec library** — how the system currently behaves, per capability. Accumulates across sprints; the regression baseline for the Evaluator. |
 | `.sprintfoundry/state/sprint-fence.json` | Orchestrator | Authorized sprint number and base commit. |
 | `.sprintfoundry/signals/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation. |
 | `.sprintfoundry/signals/eval-trigger.txt` | Orchestrator | Signal after Orchestrator commit. Must contain exactly `sprint=N` or `sprint=N-retry`. |
@@ -168,8 +170,43 @@ Constraints:
 - URL/request steps must include full URLs.
 - Steps must be executable without source-code or internal inspection.
 
-After writing `sprint-contract.md`, stop. Evaluator approval is required (it
-rejects any criterion missing an `Automated test:` mapping).
+Alongside the contract, write `spec-delta.md` — this sprint's change to the
+living spec library (`specs/<capability>/spec.md`). One capability per delta:
+
+```markdown
+# Spec Delta — Sprint <N>
+
+## Capability: <auth | payments | …>
+
+## ADDED Requirements
+
+### Requirement: <title>
+The system SHALL <observable behaviour>.
+
+#### Scenario: <name>
+- GIVEN <precondition>
+- WHEN <action>
+- THEN <observable result>
+
+## MODIFIED Requirements
+### Requirement: <existing title, copied verbatim>
+<full replacement text + scenarios>
+
+## REMOVED Requirements
+### Requirement: <existing title>
+(reason)
+```
+
+Rules: requirement identity is its **title** — `MODIFIED`/`REMOVED` must match an
+existing title in that capability's spec exactly, and `ADDED` must not collide
+with one. Requirements describe externally observable behaviour (RFC 2119
+SHALL/MUST), never internal classes or implementation steps. The Orchestrator
+merges the delta into the living spec automatically on `SPRINT PASS`; a
+mismatch pauses the harness.
+
+After writing `sprint-contract.md` and `spec-delta.md`, stop. Evaluator approval
+is required (it rejects any criterion missing an `Automated test:` mapping, and
+any malformed delta).
 
 ## Implementation Phase
 

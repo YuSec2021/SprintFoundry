@@ -419,6 +419,136 @@ def digest_verdict(text: str, limit: int = VERDICT_DIGEST_LIMIT) -> str:
     return digest
 
 
+# ── living specification library (spec deltas) ───────────────────────────────
+#
+# Sprint contracts are per-sprint and get archived, so nothing in the harness
+# accumulated a queryable description of how the system *currently* behaves —
+# answering "what are the auth rules today?" meant re-reading N historical
+# contracts. The living spec library fixes that: a sprint ships spec-delta.md
+# (ADDED / MODIFIED / REMOVED requirements for one capability) and the
+# Orchestrator merges it into <specs_dir>/<capability>/spec.md the moment the
+# sprint is attested PASS, then archives the delta.
+#
+# The merge is deterministic and conflict-detecting: adding a requirement that
+# already exists, or modifying/removing one that does not, pauses the harness
+# instead of silently corrupting the spec. Recover with --merge-spec-delta N
+# after fixing the delta by hand.
+SPEC_DELTA_FILE = "spec-delta.md"
+DEFAULT_SPECS_DIR = "specs"
+_REQ_HEADING = re.compile(r"(?m)^###\s+Requirement:\s*(.+?)\s*$")
+_DELTA_SECTION = re.compile(r"(?mi)^##\s+(ADDED|MODIFIED|REMOVED)\s+Requirements\s*$")
+SPEC_TEMPLATE = (
+    "# {title} Specification\n\n"
+    "## Purpose\n"
+    "{purpose}\n\n"
+    "## Requirements\n"
+)
+
+
+def project_specs_dir(root: Path) -> Path:
+    """Living-spec root; declared as `specs_dir:` in SPRINTFOUNDRY.md."""
+    match = re.search(
+        r"(?m)^\s*specs_dir\s*:\s*(\S+)", read_text(root / "SPRINTFOUNDRY.md")
+    )
+    raw = match.group(1) if match else DEFAULT_SPECS_DIR
+    prefix = raw.split("<", 1)[0].strip().rstrip("/")
+    return root / (prefix or DEFAULT_SPECS_DIR)
+
+
+def slug_capability(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+    return slug or "general"
+
+
+def split_requirements(text: str) -> list[tuple[str, str]]:
+    """Split markdown into (title, block) pairs, one per `### Requirement:`.
+
+    A block runs to the next heading of level 1-3, so nested
+    `#### Scenario:` content stays attached to its requirement.
+    """
+    matches = list(_REQ_HEADING.finditer(text))
+    boundaries = [m.start() for m in re.finditer(r"(?m)^#{1,3}\s", text)]
+    blocks: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = next((b for b in boundaries if b > start), len(text))
+        if index + 1 < len(matches):
+            end = min(end, matches[index + 1].start())
+        blocks.append((match.group(1).strip(), text[start:end].rstrip() + "\n"))
+    return blocks
+
+
+def parse_spec_delta(text: str) -> tuple[str, dict[str, list[tuple[str, str]]], list[str]]:
+    """Return (capability, {section: [(title, block)]}, errors)."""
+    errors: list[str] = []
+    cap_match = re.search(r"(?mi)^##\s*Capability:\s*(.+?)\s*$", text)
+    capability = cap_match.group(1).strip() if cap_match else ""
+    if not capability:
+        errors.append(f"{SPEC_DELTA_FILE} has no `## Capability: <name>` line")
+
+    sections: dict[str, list[tuple[str, str]]] = {"ADDED": [], "MODIFIED": [], "REMOVED": []}
+    marks = list(_DELTA_SECTION.finditer(text))
+    for index, mark in enumerate(marks):
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(text)
+        sections[mark.group(1).upper()] = split_requirements(text[mark.end():end])
+
+    if not any(sections.values()):
+        errors.append(
+            f"{SPEC_DELTA_FILE} declares no ADDED/MODIFIED/REMOVED requirements"
+        )
+    return capability, sections, errors
+
+
+def merge_spec_delta(
+    spec_text: str, sections: dict[str, list[tuple[str, str]]], capability: str
+) -> tuple[str, list[str]]:
+    """Apply a parsed delta to a living spec. Returns (new_text, errors).
+
+    Requirement identity is its title (case-insensitive). Errors are collected
+    rather than raised so the caller can report every conflict at once; on any
+    error the original text is returned unchanged (all-or-nothing).
+    """
+    errors: list[str] = []
+    if not spec_text.strip():
+        spec_text = SPEC_TEMPLATE.format(
+            title=capability.strip().title() or "Capability",
+            purpose=f"Behaviour of the {capability} capability.",
+        )
+
+    existing = split_requirements(spec_text)
+    by_title = {title.lower(): block for title, block in existing}
+    order = [title.lower() for title, _ in existing]
+
+    for title, block in sections.get("ADDED", []):
+        key = title.lower()
+        if key in by_title:
+            errors.append(f"ADDED requirement already exists: {title}")
+            continue
+        by_title[key] = block
+        order.append(key)
+    for title, block in sections.get("MODIFIED", []):
+        key = title.lower()
+        if key not in by_title:
+            errors.append(f"MODIFIED requirement not found in spec: {title}")
+            continue
+        by_title[key] = block
+    for title, _ in sections.get("REMOVED", []):
+        key = title.lower()
+        if key not in by_title:
+            errors.append(f"REMOVED requirement not found in spec: {title}")
+            continue
+        by_title.pop(key)
+        order.remove(key)
+
+    if errors:
+        return spec_text, errors
+
+    first = _REQ_HEADING.search(spec_text)
+    header = spec_text[:first.start()] if first else spec_text
+    body = "\n".join(by_title[key].rstrip() + "\n" for key in order)
+    return header.rstrip("\n") + "\n\n" + body, []
+
+
 @dataclass
 class RouteDecision:
     rule: str
@@ -607,6 +737,9 @@ class HarnessProject:
         self.scope_classification_path = self.state_dir / "scope-classification.json"
         self.change_request_path = self.root / "change-request.md"
         self.bug_report_path = self.root / "bug-report.md"
+        # Per-sprint delta against the living spec library; merged into
+        # <specs_dir>/<capability>/spec.md on SPRINT PASS, then archived.
+        self.spec_delta_path = self.root / SPEC_DELTA_FILE
         # Sprint fence: written before Codex implements. Records the expected
         # sprint, base commit, AND the sha256 of the approved contract — the
         # Orchestrator (not the Generator) owns contract-tamper detection.
@@ -1594,6 +1727,39 @@ class HarnessProject:
 
     # ── quality gate ──────────────────────────────────────────────────────
 
+    # ── living spec library ───────────────────────────────────────────────
+
+    def merge_spec_delta_file(self, sprint: int) -> tuple[bool, str]:
+        """Merge spec-delta.md into the living spec library, then archive it.
+
+        Called once a sprint is attested PASS. Absent delta is a no-op (so
+        projects that do not use the spec library are unaffected). Any conflict
+        leaves both the spec and the delta untouched and reports the reason so
+        the caller can pause.
+        """
+        if not self.spec_delta_path.exists():
+            return True, "no spec delta for this sprint"
+
+        capability, sections, errors = parse_spec_delta(read_text(self.spec_delta_path))
+        if errors:
+            return False, "; ".join(errors)
+
+        target = project_specs_dir(self.root) / slug_capability(capability) / "spec.md"
+        merged, errors = merge_spec_delta(read_text(target), sections, capability)
+        if errors:
+            return False, f"capability '{capability}': " + "; ".join(errors)
+
+        write_text(target, merged)
+        _archive_move(
+            self,
+            self.spec_delta_path,
+            f"{ARCHIVE_DIR}/sprint-{sprint}/{SPEC_DELTA_FILE}",
+        )
+        counts = {k: len(v) for k, v in sections.items() if v}
+        return True, (
+            f"merged spec delta into {target.relative_to(self.root)} ({counts})"
+        )
+
     def quality_gate_path(self, sprint: int) -> Path:
         return self.quality_dir / f"quality-gate-{sprint}.md"
 
@@ -2331,6 +2497,47 @@ def maybe_cleanup_sprint_artifacts(project: HarnessProject, decision: RouteDecis
             project.save_run_state(state)
 
 
+def merge_spec_delta_on_pass(
+    project: HarnessProject, decision: RouteDecision
+) -> RouteDecision:
+    """Fold the passed sprint's spec delta into the living spec library.
+
+    Runs only on the PASS transition (`last_successful` set). A conflict is
+    surfaced as a pause rather than a silent skip, because a spec library that
+    quietly missed a merge is worse than no spec library. After fixing the
+    delta by hand, recover with `orchestrate.py --merge-spec-delta N`.
+    """
+    if not decision.last_successful:
+        return decision
+
+    ok, message = project.merge_spec_delta_file(decision.last_successful)
+    project.append_audit(
+        event="spec_delta_merged" if ok else "spec_delta_conflict",
+        actor="orchestrator",
+        sprint=decision.last_successful,
+        payload={"message": message},
+    )
+    if ok:
+        if not message.startswith("no spec delta"):
+            decision.rationale += f" — {message}"
+        return decision
+
+    return RouteDecision(
+        rule="spec_delta_conflict",
+        action="pause_for_human",
+        rationale=(
+            f"sprint {decision.last_successful} passed but its spec delta could not "
+            f"be merged: {message}. Fix {SPEC_DELTA_FILE}, then run "
+            f"`orchestrate.py --merge-spec-delta {decision.last_successful}`"
+        ),
+        mode="paused",
+        current_sprint=decision.current_sprint,
+        needs_human=True,
+        last_failure_reason=f"Spec delta merge conflict: {message}",
+        last_successful=decision.last_successful,
+    )
+
+
 def prepare_branch_for_decision(project: HarnessProject, decision: RouteDecision) -> RouteDecision:
     if decision.action == "invoke_codex_for_implementation":
         ok, active, base, error = project.prepare_sprint_branch(decision.current_sprint)
@@ -2398,6 +2605,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--json", action="store_true", help="Print decision as JSON.")
     parser.add_argument(
+        "--merge-spec-delta",
+        type=int,
+        metavar="SPRINT",
+        help=(
+            "Merge spec-delta.md into the living spec library for SPRINT and "
+            "archive it. Normally automatic on SPRINT PASS; use this to recover "
+            "after fixing a delta that failed to merge."
+        ),
+    )
+    parser.add_argument(
         "--attest-eval",
         type=int,
         metavar="SPRINT",
@@ -2456,6 +2673,25 @@ def main(argv: list[str]) -> int:
             # normal enforcement. Must precede routing so a bootstrap and the
             # decision see the same attestation state.
             project.bootstrap_attestations()
+
+        if args.merge_spec_delta is not None:
+            ok, message = project.merge_spec_delta_file(args.merge_spec_delta)
+            project.append_audit(
+                event="spec_delta_merged" if ok else "spec_delta_conflict",
+                actor="orchestrator",
+                sprint=args.merge_spec_delta,
+                payload={"message": message, "manual": True},
+            )
+            payload = {
+                "project_dir": str(project.root),
+                "action": "merge_spec_delta",
+                "sprint": args.merge_spec_delta,
+                "ok": ok,
+                "message": message,
+            }
+            print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json
+                  else f"merge_spec_delta sprint={args.merge_spec_delta}: {message}")
+            return 0 if ok else 1
 
         if args.attest_eval is not None:
             ok, message = project.attest_eval(args.attest_eval)
@@ -2523,6 +2759,9 @@ def main(argv: list[str]) -> int:
         if not args.check_only:
             decision = prepare_branch_for_decision(project, decision)
             maybe_cleanup_sprint_artifacts(project, decision)
+            # A passed sprint's behaviour becomes part of the living spec
+            # library before the next sprint is contracted.
+            decision = merge_spec_delta_on_pass(project, decision)
             # Write the sprint fence (sprint + base commit + contract sha)
             # before handing off to Codex so boundary and tamper checks have
             # an Orchestrator-owned reference point.

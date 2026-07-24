@@ -1798,3 +1798,196 @@ def test_prompt_size_fuse_measures_bytes_not_characters(tmp_path: Path) -> None:
     data = (tmp_path / decision.prompt_file).read_bytes()
     assert len(data) <= 16_384, f"prompt file is {len(data)}B > shell fuse"
     assert "PROMPT TRUNCATED" in data.decode("utf-8")
+
+
+# --- living spec library (spec deltas) ----------------------------------------
+
+SPEC_DELTA = Path("spec-delta.md")
+
+
+def _delta(capability: str, body: str) -> str:
+    return f"# Spec Delta — Sprint 1\n\n## Capability: {capability}\n\n{body}"
+
+
+LOGIN_REQ = """## ADDED Requirements
+
+### Requirement: User Login
+The system SHALL issue a token on valid credentials.
+
+#### Scenario: Valid credentials
+- GIVEN a registered user
+- WHEN they submit valid credentials
+- THEN a token is returned
+"""
+
+
+EXISTING_SPEC = """# Auth Specification
+
+## Purpose
+Authentication behaviour.
+
+## Requirements
+
+### Requirement: User Login
+The system SHALL issue a token.
+
+#### Scenario: Valid credentials
+- GIVEN a user
+- WHEN valid
+- THEN token
+
+### Requirement: Session Expiry
+The system MUST expire sessions after 30 minutes.
+
+#### Scenario: Idle
+- GIVEN a session
+- WHEN idle 30m
+- THEN invalidated
+"""
+
+
+def test_spec_delta_added_creates_capability_spec(tmp_path: Path) -> None:
+    """An ADDED delta bootstraps specs/<capability>/spec.md and archives itself."""
+    write_file(tmp_path / SPEC_DELTA, _delta("auth", LOGIN_REQ))
+
+    result = run_orchestrator(tmp_path, "--merge-spec-delta", "1", "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert payload["ok"] is True
+
+    spec = (tmp_path / "specs" / "auth" / "spec.md").read_text(encoding="utf-8")
+    assert "### Requirement: User Login" in spec
+    assert "#### Scenario: Valid credentials" in spec, "scenarios must survive the merge"
+    assert "THEN a token is returned" in spec
+    assert not (tmp_path / SPEC_DELTA).exists(), "consumed delta must be archived"
+    assert (tmp_path / ARCHIVE_DIR / "sprint-1" / "spec-delta.md").exists()
+
+
+def test_spec_delta_modified_replaces_requirement(tmp_path: Path) -> None:
+    write_file(tmp_path / "specs" / "auth" / "spec.md", EXISTING_SPEC)
+    write_file(
+        tmp_path / SPEC_DELTA,
+        _delta(
+            "auth",
+            "## MODIFIED Requirements\n\n"
+            "### Requirement: Session Expiry\n"
+            "The system MUST expire sessions after 15 minutes.\n\n"
+            "#### Scenario: Idle\n- GIVEN a session\n- WHEN idle 15m\n- THEN invalidated\n",
+        ),
+    )
+
+    result = run_orchestrator(tmp_path, "--merge-spec-delta", "1", "--json")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    spec = (tmp_path / "specs" / "auth" / "spec.md").read_text(encoding="utf-8")
+    assert "15 minutes" in spec and "30 minutes" not in spec
+    assert "### Requirement: User Login" in spec, "untouched requirements stay"
+    assert spec.count("### Requirement: Session Expiry") == 1, "must replace, not append"
+
+
+def test_spec_delta_removed_deletes_requirement(tmp_path: Path) -> None:
+    write_file(tmp_path / "specs" / "auth" / "spec.md", EXISTING_SPEC)
+    write_file(
+        tmp_path / SPEC_DELTA,
+        _delta(
+            "auth",
+            "## REMOVED Requirements\n\n"
+            "### Requirement: Session Expiry\n(superseded)\n",
+        ),
+    )
+
+    result = run_orchestrator(tmp_path, "--merge-spec-delta", "1", "--json")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    spec = (tmp_path / "specs" / "auth" / "spec.md").read_text(encoding="utf-8")
+    assert "Session Expiry" not in spec
+    assert "### Requirement: User Login" in spec
+
+
+def test_spec_delta_conflict_leaves_spec_and_delta_untouched(tmp_path: Path) -> None:
+    """Modifying a requirement that does not exist must fail closed."""
+    write_file(tmp_path / "specs" / "auth" / "spec.md", EXISTING_SPEC)
+    write_file(
+        tmp_path / SPEC_DELTA,
+        _delta("auth", "## MODIFIED Requirements\n\n### Requirement: Ghost\nnope\n"),
+    )
+
+    result = run_orchestrator(tmp_path, "--merge-spec-delta", "1", "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["ok"] is False
+    assert "not found" in payload["message"]
+    assert (tmp_path / SPEC_DELTA).exists(), "failed merge must not consume the delta"
+    assert (
+        tmp_path / "specs" / "auth" / "spec.md"
+    ).read_text(encoding="utf-8") == EXISTING_SPEC
+
+
+def test_spec_delta_duplicate_add_is_rejected(tmp_path: Path) -> None:
+    write_file(tmp_path / "specs" / "auth" / "spec.md", EXISTING_SPEC)
+    write_file(tmp_path / SPEC_DELTA, _delta("auth", LOGIN_REQ))
+
+    result = run_orchestrator(tmp_path, "--merge-spec-delta", "1", "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert "already exists" in payload["message"]
+
+
+def test_spec_delta_merges_automatically_on_sprint_pass(tmp_path: Path) -> None:
+    """The PASS transition folds the delta into the living spec library."""
+    write_spec(tmp_path / "planner-spec.json")
+    write_file(tmp_path / "sprint-contract.md", "## Sprint 1\nCONTRACT APPROVED\n")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
+    write_eval_result(tmp_path, 1, "## Verdict: SPRINT PASS\n")
+    write_file(tmp_path / SPEC_DELTA, _delta("auth", LOGIN_REQ))
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert payload["rule"] == "eval_trigger_has_pass"
+    assert (tmp_path / "specs" / "auth" / "spec.md").exists(), (
+        "spec delta must merge on SPRINT PASS"
+    )
+    assert not (tmp_path / SPEC_DELTA).exists()
+
+
+def test_spec_delta_conflict_on_pass_pauses(tmp_path: Path) -> None:
+    """A delta that cannot merge pauses instead of silently skipping."""
+    write_spec(tmp_path / "planner-spec.json")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
+    write_eval_result(tmp_path, 1, "## Verdict: SPRINT PASS\n")
+    write_file(tmp_path / "specs" / "auth" / "spec.md", EXISTING_SPEC)
+    write_file(
+        tmp_path / SPEC_DELTA,
+        _delta("auth", "## REMOVED Requirements\n\n### Requirement: Ghost\ngone\n"),
+    )
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert payload["rule"] == "spec_delta_conflict"
+    assert payload["needs_human"] is True
+    run_state = json.loads((tmp_path / RUN_STATE).read_text(encoding="utf-8"))
+    assert run_state["needs_human"] is True
+
+
+def test_spec_delta_absent_is_a_no_op(tmp_path: Path) -> None:
+    """Projects that do not use the spec library are unaffected."""
+    write_spec(tmp_path / "planner-spec.json")
+    write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
+    write_eval_result(tmp_path, 1, "## Verdict: SPRINT PASS\n")
+
+    result = run_orchestrator(tmp_path, "--json")
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert payload["rule"] == "eval_trigger_has_pass"
+    assert not (tmp_path / "specs").exists()
+
+
+def test_spec_delta_honours_custom_specs_dir(tmp_path: Path) -> None:
+    """specs_dir declared in SPRINTFOUNDRY.md overrides the default."""
+    write_file(tmp_path / "SPRINTFOUNDRY.md", "specs_dir: docs/behaviour/<capability>\n")
+    write_file(tmp_path / SPEC_DELTA, _delta("Payments API", LOGIN_REQ))
+
+    result = run_orchestrator(tmp_path, "--merge-spec-delta", "1", "--json")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "docs" / "behaviour" / "payments-api" / "spec.md").exists()

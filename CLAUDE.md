@@ -130,7 +130,9 @@ agent until a human explicitly clears it.
    → pause), then Quality Gate (missing → run it; unattested → archive +
    re-run; FAIL → quality retry; PASS → Evaluator CHECK) or targeted Codex
    retry on a FAIL verdict (digest inlined, full verdict archived to
-   `.sprintfoundry/archive/`).
+   `.sprintfoundry/archive/`). On PASS, `spec-delta.md` is merged into the
+   living spec library (`specs/<capability>/spec.md`) and archived; a title
+   conflict pauses (`spec_delta_conflict` — recover with `--merge-spec-delta N`).
 7. `sprint-contract.md` unapproved (or approval unattested) → Evaluator
    contract review; contract modified after approval attestation → pause.
 8. Attested approved contract → prepare branch + fence (records contract sha

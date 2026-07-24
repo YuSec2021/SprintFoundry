@@ -38,6 +38,14 @@ Schema constraints the Evaluator will enforce:
 - Every step requiring navigation/HTTP must include a full URL path
 - Contract needs **≥ 1** success criterion and **≥ 3** total test steps
 
+Also write **`spec-delta.md`** next to the contract: `## Capability: <name>` plus
+`## ADDED / MODIFIED / REMOVED Requirements`, each requirement a
+`### Requirement: <title>` block with `#### Scenario:` GIVEN/WHEN/THEN steps
+(RFC 2119 SHALL/MUST, externally observable only). Titles are identities —
+`MODIFIED`/`REMOVED` must match an existing title in
+`specs/<capability>/spec.md` exactly; `ADDED` must not collide. Read that spec
+first. The Orchestrator merges the delta on `SPRINT PASS`; a mismatch pauses.
+
 After writing `sprint-contract.md`, stop. Orchestrator routes to Evaluator for contract review.
 
 ### Step 3 — Implement (only after `sprint-contract.md` contains "CONTRACT APPROVED")

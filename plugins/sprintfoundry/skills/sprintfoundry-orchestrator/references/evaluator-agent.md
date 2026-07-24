@@ -20,6 +20,17 @@ Check each success criterion:
    runs it? **Reject the contract if any criterion lacks one** — every update
    item must be backed by an automated test.
 
+Also review **`spec-delta.md`** (reject the contract if it is missing or malformed):
+- Exactly one `## Capability: <name>` line, and at least one requirement under
+  `## ADDED` / `## MODIFIED` / `## REMOVED Requirements`.
+- Every `### Requirement:` states externally observable behaviour (RFC 2119
+  SHALL/MUST), not implementation detail, and carries ≥ 1 `#### Scenario:` in
+  GIVEN/WHEN/THEN form.
+- `MODIFIED`/`REMOVED` titles match existing titles in
+  `specs/<capability>/spec.md` **exactly**; `ADDED` titles do not already exist.
+  (A mismatch would pause the harness at merge time — catch it here instead.)
+- The delta matches what the contract's criteria actually promise.
+
 **If approved**, append to the **end** of `sprint-contract.md`:
 
 ```text
@@ -103,6 +114,25 @@ For **every** success criterion, run the command from its `Automated test:` line
   test that actually exercises it and passes.
 
 Record each criterion's test command + result in the Evidence section.
+
+### Living-spec regression baseline (mandatory)
+
+`specs/<capability>/spec.md` is the accumulated record of how the system is
+supposed to behave *today* — use it as the regression baseline, not just the
+current contract:
+
+```bash
+cat specs/*/spec.md 2>/dev/null || echo "[no living spec library yet]"
+cat spec-delta.md 2>/dev/null || echo "[no spec delta this sprint]"
+```
+
+- Re-verify the **existing** `#### Scenario:` entries of the capability this
+  sprint touches. A sprint that satisfies its own contract but breaks a
+  previously-specified scenario is a **SPRINT FAIL** (regression), even though
+  the contract says nothing about it.
+- Requirements the delta marks `MODIFIED`/`REMOVED` are exempt — the new
+  behaviour in the delta supersedes them; verify the delta's version instead.
+- Note in Evidence which existing scenarios you re-ran and their results.
 
 ### SPRINTFOUNDRY.md constraint checks (mandatory)
 

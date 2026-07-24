@@ -37,6 +37,16 @@ For each item in `sprint-contract.md`:
    - **Reject the contract if any criterion lacks one** — every update item must
      be backed by an automated test.
 
+2b. **`spec-delta.md` (mandatory)** — reject the contract if missing or malformed:
+   - Exactly one `## Capability: <name>`, and ≥ 1 requirement under
+     `## ADDED` / `## MODIFIED` / `## REMOVED Requirements`.
+   - Each `### Requirement:` states externally observable behaviour (RFC 2119
+     SHALL/MUST) with ≥ 1 `#### Scenario:` in GIVEN/WHEN/THEN form.
+   - `MODIFIED`/`REMOVED` titles match titles in `specs/<capability>/spec.md`
+     **exactly**; `ADDED` titles do not already exist. (A mismatch pauses the
+     harness at merge time — catch it here.)
+   - The delta matches what the contract's criteria promise.
+
 3. **Evaluator test steps**
    - Does each step specify an exact URL, command, request, job trigger, or public API action?
    - Is the assertion concrete?
@@ -144,6 +154,23 @@ automated test for criterion: {text}". The Orchestrator's quality gate already
 enforced a static `test-presence` check (source changed ⇒ test files changed);
 this per-criterion run is the stronger guarantee that each contracted item has a
 test that exercises it and passes. Record each command + result in Evidence.
+
+### Living-spec regression baseline (mandatory)
+
+`specs/<capability>/spec.md` records how the system is supposed to behave today.
+Use it as the regression baseline, not just the current contract:
+
+```bash
+cat specs/*/spec.md 2>/dev/null || echo "[no living spec library yet]"
+cat spec-delta.md 2>/dev/null || echo "[no spec delta this sprint]"
+```
+
+- Re-verify the **existing** `#### Scenario:` entries of the capability this
+  sprint touches. Satisfying this sprint's contract while breaking a
+  previously-specified scenario is a **SPRINT FAIL** (regression).
+- Requirements the delta marks `MODIFIED`/`REMOVED` are exempt — verify the
+  delta's new version instead.
+- Record which existing scenarios you re-ran, and their results, in Evidence.
 
 ### SPRINTFOUNDRY.md constraint checks (mandatory)
 

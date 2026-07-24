@@ -65,6 +65,27 @@ Its presence always means "sprint in progress."
 
 ---
 
+## Living Specification Library
+
+`specs/<capability>/spec.md` (path configurable via `specs_dir:` in
+`SPRINTFOUNDRY.md`) is the standing description of how the system behaves
+*today* — requirements in RFC 2119 form, each with GIVEN/WHEN/THEN scenarios.
+
+Each sprint ships `spec-delta.md` (`## Capability:` + `## ADDED / MODIFIED /
+REMOVED Requirements`). On `SPRINT PASS` the Orchestrator merges it
+deterministically into the capability's spec and archives the delta under
+`.sprintfoundry/archive/sprint-{N}/`. Requirement identity is the **title**:
+adding an existing title, or modifying/removing a missing one, pauses the
+harness (`spec_delta_conflict`) instead of corrupting the spec; recover with
+`orchestrate.py --merge-spec-delta {N}`.
+
+The library is the Evaluator's **regression baseline**: during CHECK it
+re-verifies the existing scenarios of the touched capability, so a sprint that
+meets its own contract while breaking previously-specified behaviour fails.
+Projects that never write `spec-delta.md` are unaffected — the merge is a no-op.
+
+---
+
 ## Completion Signal (set-based progress)
 
 The **only** completion signal is `.sprintfoundry/results/eval/eval-result-{N}.md`

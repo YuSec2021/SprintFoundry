@@ -165,6 +165,7 @@ cat .sprintfoundry/state/run-state.json      2>/dev/null || cat run-state.json 2
 cat .sprintfoundry/claude-progress.txt 2>/dev/null || cat claude-progress.txt 2>/dev/null || echo "[no progress]"
 cat .sprintfoundry/signals/eval-trigger.txt    2>/dev/null || cat eval-trigger.txt 2>/dev/null || echo "[no eval-trigger]"
 cat sprint-contract.md  2>/dev/null | head -5 || echo "[no contract]"
+ls specs/*/spec.md      2>/dev/null || echo "[no living spec library yet]"
 find .sprintfoundry/results/eval -maxdepth 1 -name 'eval-result-*.md' 2>/dev/null \
   || ls eval-result-*.md 2>/dev/null \
   || echo "[no eval results]"
@@ -358,7 +359,8 @@ that sprint is pending and self-clears once it passes.
 | `invoke_evaluator_contract_review` | Read `references/evaluator-agent.md`, then `Agent(subagent_type="evaluator", prompt=decision.prompt + project-root preamble)`. **If the Evaluator approves (contract now carries a dedicated CONTRACT APPROVED line), immediately attest the approval:** `python3 "$ORCH" --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --attest-contract` — then re-run the orchestrator script. An approval marker without attestation routes back to review (`contract_approval_unattested`); never attest a marker you did not just receive from the Evaluator. |
 | `invoke_evaluator` | Same, for the black-box CHECK. The prompt already points at the quality-gate report. **Immediately after the Evaluator sub-agent returns and `eval-result-{N}.md` exists, attest the verdict:** `python3 "$ORCH" --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --attest-eval {N}` — then re-run the orchestrator script. |
 | `invoke_codex_for_contract` / `_implementation` / `_retry` / `_quality_retry` / `_bugfix_contract` / `_iteration_contract` | Run `decision.command` via Bash (it invokes Codex through the `run-codex.sh` watchdog). See Codex invocation section for the timeout-retry policy. |
-| `clear_eval_trigger_and_continue` | The sprint PASSED. Run the Auto-Version bump, then the Sprint Branch Merge (both below), then re-run the orchestrator script. |
+| `clear_eval_trigger_and_continue` | The sprint PASSED. The script has already merged `spec-delta.md` into the living spec library. Run the Auto-Version bump, then the Sprint Branch Merge (both below), then re-run the orchestrator script. |
+| `spec_delta_conflict` | The sprint passed but its spec delta could not merge (title mismatch). Stop, surface the message, and tell the user to fix `spec-delta.md` then run `python3 "$ORCH" --project-dir "$SPRINTFOUNDRY_PROJECT_ROOT" --merge-spec-delta {N}`. |
 | `complete` | Report to the user, summarise `.sprintfoundry/claude-progress.txt`, ask for the next feature. |
 
 After every delegated step finishes, **re-run the orchestrator script** and act

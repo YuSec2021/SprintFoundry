@@ -113,6 +113,39 @@ If `ACTION=implement`: skip to Step 3.
 - Every assertion step must be verifiable through the configured black-box surface without reading source code.
 - The contract must have **≥ 1** success criterion and **≥ 3** total test steps.
 
+**Also write `spec-delta.md`** — this sprint's change to the living spec library
+(`specs/<capability>/spec.md`), one capability per delta:
+
+```markdown
+# Spec Delta — Sprint <N>
+
+## Capability: <auth | payments | …>
+
+## ADDED Requirements
+
+### Requirement: <title>
+The system SHALL <observable behaviour>.
+
+#### Scenario: <name>
+- GIVEN <precondition>
+- WHEN <action>
+- THEN <observable result>
+
+## MODIFIED Requirements
+### Requirement: <existing title, verbatim>
+<full replacement text + scenarios>
+
+## REMOVED Requirements
+### Requirement: <existing title>
+(reason)
+```
+
+Requirement identity is its **title**: `MODIFIED`/`REMOVED` must match an existing
+title exactly; `ADDED` must not collide. Describe externally observable behaviour
+(RFC 2119 SHALL/MUST) — never internal classes or implementation steps. Read the
+capability's current `specs/<capability>/spec.md` first so the delta is accurate.
+The Orchestrator merges it on `SPRINT PASS`; a mismatch pauses the harness.
+
 Then stop and wait for Evaluator approval.
 
 ### Step 3 — Implement

@@ -97,7 +97,8 @@ flowchart TD
     QF --> RQ
     Q -- 通过 --> E["Evaluator 黑盒 CHECK"]
     E --> R{"验收结论"}
-    R -- "SPRINT PASS" --> V["版本 bump、changelog、tag、清理"]
+    R -- "SPRINT PASS" --> M["合并 spec delta 进活规格库"]
+    M --> V["版本 bump、changelog、tag、清理"]
     R -- "SPRINT FAIL" --> F{"重试超限 / 架构漂移?"}
     F -- 可重试 --> G
     F -- 暂停 --> H["人工接管"]
@@ -146,12 +147,25 @@ Evaluator 不再是浏览器专用验收器。Planner 会在 `planner-spec.json`
 
 目标项目可以通过 `SPRINTFOUNDRY.md` 定义顶层项目宪章：
 
-- §1 固定技术栈、架构边界、允许的依赖、验证表面以及测试/案例目录。
+- §1 固定技术栈、架构边界、允许的依赖、验证表面以及测试/案例/规格目录。
 - §2a 要求每条 sprint 验收标准都有一个自动化验收测试。
 - §2b 要求独立且长期维护的功能回归测试；数据功能必须覆盖完整 CRUD 矩阵。
 - §3 要求每个完成的功能都有可运行的端到端示例。
+- §4 定义活规格库及其增量（delta）工作流。
 
 质量门禁中的 `feature-gate` 会确定性检查：修改应用源码的 feature 类型 sprint 必须同时修改声明的功能回归测试目录和案例目录。架构漂移以及测试/案例是否真正覆盖功能，仍由 Evaluator 负责语义判断。
+
+## 活规格库
+
+sprint 合同是一次性的、完成后即归档，因此它们本身无法回答「这个系统**现在**应该表现成什么样」。活规格库就是这个问题的常驻答案，同时充当 Evaluator 的回归基线。
+
+- `specs/<能力域>/spec.md`（路径可通过 `SPRINTFOUNDRY.md` 的 `specs_dir:` 覆盖）存放 `### Requirement:` 块，用 RFC 2119 术语（SHALL / MUST）描述**外部可观测行为**，每条需求配 `#### Scenario:` 的 GIVEN / WHEN / THEN 场景。只写行为，不写内部类名或实现步骤。
+- 每个 sprint 产出 `spec-delta.md`，针对**单个能力域**声明 `## ADDED`、`## MODIFIED`、`## REMOVED Requirements`。
+- 在通过认证的 `SPRINT PASS` 之后，Orchestrator 确定性地把 delta 合并进该能力域的规格，并归档到 `.sprintfoundry/archive/sprint-{N}/`。
+- 需求的身份是**标题**：ADDED 撞名、MODIFIED/REMOVED 找不到目标，都会让 harness 暂停（`spec_delta_conflict`），而不是污染规格。修好 delta 后执行 `orchestrate.py --merge-spec-delta {N}` 恢复。
+- CHECK 阶段 Evaluator 会重新验证本 sprint 所触能力域的**既有**场景：满足了自己的合同却打破既有行为 = `SPRINT FAIL`。被本次 delta 标记为 MODIFIED / REMOVED 的需求豁免。
+
+不使用该机制的项目完全不受影响：不写 `spec-delta.md` 时合并步骤是空操作。
 
 ## 文件状态协议
 
@@ -163,6 +177,8 @@ SprintFoundry 是文件驱动状态机。Orchestrator 总是优先相信当前�
 | `SPRINTFOUNDRY.md` | Planner + Human | 项目宪章：架构、双层测试、可运行案例及其目录声明 |
 | `planner-spec.json` | Planner | 产品规格、视觉语言、技术栈、验证模式和 sprint 列表 |
 | `sprint-contract.md` | Generator + Evaluator | 当前 sprint 的验收合同；未批准前不能编码 |
+| `spec-delta.md` | Generator | 本 sprint 针对单个能力域的 ADDED/MODIFIED/REMOVED 需求；PASS 后合并进活规格并归档 |
+| `specs/<能力域>/spec.md` | Orchestrator（合并写入） | 活规格库：系统当前应有行为，按能力域组织；Evaluator 的回归基线 |
 | `.sprintfoundry/state/sprint-fence.json` | Orchestrator | 实现开始前的预期 sprint 号和 base commit |
 | `.sprintfoundry/prompts/sprint-{N}/attempt-{K}-{action}.md` | Orchestrator | 当前 contract、implementation 或 retry 交接的完整 Codex prompt；Codex CLI 命令行只接收读取该文件的短指令 |
 | `.sprintfoundry/signals/commit-requests/sprint-{N}.json` | Generator | 请求 Orchestrator 代为提交并创建 trigger |
@@ -191,11 +207,12 @@ Evaluator 做黑盒验证前，Orchestrator 会先运行 `references/quality-gat
 
 根据检测到的技术栈，它可以运行：
 
-- lint 检查
-- 类型检查
+- lint 检查（JS/TS 用 ESLint，Python 用 flake8）
+- 类型检查（`tsc --noEmit`、mypy）
 - 单元测试
 - 覆盖率阈值
-- 依赖安全审计
+- 依赖安全审计（`npm audit`、`pip-audit`）
+- 前端静态资源检查：按**文件存在性**触发（而非技术栈关键词），因此不带框架的纯静态站点也能覆盖——HTML 用 htmlhint，CSS 用 stylelint，原生 JavaScript 在框架分支未跑过 ESLint 时补跑 ESLint
 - 与技术栈无关的 `test-presence` 检查：应用源码有改动但没有新增或更新测试文件时直接失败
 - `feature-gate` 检查：feature 类型 sprint 必须提供功能回归测试和可运行案例
 
@@ -257,13 +274,17 @@ CI 工作流 `.github/workflows/validate-plugins.yml` 会校验：
 ├── scripts/
 │   ├── package_plugin.sh
 │   ├── orchestrate.py
+│   ├── run-codex.sh
 │   ├── harness-log.py
+│   ├── check-agent-sync.sh
+│   ├── run-python-tests.sh
 │   └── install-hooks.sh
 ├── examples/
 │   ├── bug-report.md
 │   ├── change-request.md
 │   ├── human-escalation.md
-│   └── planner-spec.json
+│   ├── planner-spec.json
+│   └── scope-classification.json
 ├── tests/
 │   └── test_orchestrate.py
 ├── SPRINTFOUNDRY.md

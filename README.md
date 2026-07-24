@@ -97,7 +97,8 @@ flowchart TD
     QF --> RQ
     Q -- pass --> E["Evaluator black-box CHECK"]
     E --> R{"Verdict"}
-    R -- "SPRINT PASS" --> V["Version bump, changelog, tag, cleanup"]
+    R -- "SPRINT PASS" --> M["Merge spec delta into living spec library"]
+    M --> V["Version bump, changelog, tag, cleanup"]
     R -- "SPRINT FAIL" --> F{"retry limit / drift?"}
     F -- retry --> G
     F -- pause --> H["Human escalation"]
@@ -147,12 +148,25 @@ This makes SprintFoundry suitable for frontend apps, full-stack apps, API servic
 
 Each target project may define `SPRINTFOUNDRY.md` as its top-level constitution:
 
-- §1 records the pinned technology stack, architecture boundaries, allowed dependencies, verification surface, and test/example directories.
+- §1 records the pinned technology stack, architecture boundaries, allowed dependencies, verification surface, and test/example/spec directories.
 - §2a requires one automated acceptance test for every sprint criterion.
 - §2b requires a separate, permanent feature regression suite, including the full CRUD matrix for data features.
 - §3 requires a runnable end-to-end example for every completed feature.
+- §4 defines the living specification library and its delta workflow.
 
 The quality gate's `feature-gate` deterministically checks that feature-type sprints touching application source also touch the declared feature-test and example directories. The Evaluator remains responsible for judging architecture drift and whether those tests and examples genuinely cover the feature.
+
+## Living Specification Library
+
+Sprint contracts are per-sprint and get archived, so on their own they never answer *"how is this system supposed to behave today?"*. The living specification library is the standing answer, and it doubles as the Evaluator's regression baseline.
+
+- `specs/<capability>/spec.md` (path configurable via `specs_dir:` in `SPRINTFOUNDRY.md`) holds `### Requirement:` blocks written in RFC 2119 terms (SHALL / MUST), each with `#### Scenario:` entries in GIVEN / WHEN / THEN form. Behaviour only — no internal classes or implementation steps.
+- Every sprint ships `spec-delta.md`, declaring `## ADDED`, `## MODIFIED`, and `## REMOVED Requirements` for exactly one capability.
+- On an attested `SPRINT PASS`, the Orchestrator merges the delta into the capability's spec deterministically, then archives it under `.sprintfoundry/archive/sprint-{N}/`.
+- Requirement identity is the **title**: adding an existing title, or modifying/removing a missing one, pauses the harness (`spec_delta_conflict`) instead of corrupting the spec. Fix the delta, then run `orchestrate.py --merge-spec-delta {N}`.
+- During CHECK the Evaluator re-verifies the existing scenarios of the capability a sprint touches, so a sprint that satisfies its own contract while breaking previously specified behaviour is a `SPRINT FAIL`. Requirements the current delta marks `MODIFIED` or `REMOVED` are exempt.
+
+Projects that never write `spec-delta.md` are unaffected: the merge step is a no-op.
 
 ## File-State Protocol
 
@@ -164,6 +178,8 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 | `SPRINTFOUNDRY.md` | Planner + Human | Project constitution for architecture, dual test layers, runnable examples, and their declared directories |
 | `planner-spec.json` | Planner | Product spec, design language, tech stack, verification mode, and sprint list |
 | `sprint-contract.md` | Generator + Evaluator | Current sprint acceptance contract; code cannot start until approved |
+| `spec-delta.md` | Generator | This sprint's ADDED/MODIFIED/REMOVED requirements for one capability; merged into the living spec on PASS, then archived |
+| `specs/<capability>/spec.md` | Orchestrator (merged) | Living specification library: how the system currently behaves, per capability; the Evaluator's regression baseline |
 | `.sprintfoundry/state/sprint-fence.json` | Orchestrator | Expected sprint number and base commit before implementation starts |
 | `.sprintfoundry/prompts/sprint-{N}/attempt-{K}-{action}.md` | Orchestrator | Immutable, attempt-numbered Codex prompt for the current contract, implementation, or retry handoff; Codex CLI receives only a short command telling it to read this file |
 | `.sprintfoundry/signals/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation |
@@ -192,11 +208,12 @@ Before the Evaluator performs black-box verification, the orchestrator runs an i
 
 Depending on the detected stack, it can run:
 
-- lint checks
-- type checks
+- lint checks (ESLint for JS/TS; flake8 for Python)
+- type checks (`tsc --noEmit`, mypy)
 - unit tests
 - coverage thresholds
-- dependency security audits
+- dependency security audits (`npm audit`, `pip-audit`)
+- frontend asset checks triggered by file presence rather than stack keywords, so plain static sites are covered too: htmlhint for HTML, stylelint for CSS, and ESLint for vanilla JavaScript when no framework branch already linted it
 - a stack-independent `test-presence` check that rejects application source changes without an added or updated test file
 - a `feature-gate` check that requires feature regression tests and runnable examples for feature-type sprints
 
@@ -258,13 +275,17 @@ The CI workflow `.github/workflows/validate-plugins.yml` validates:
 ├── scripts/
 │   ├── package_plugin.sh
 │   ├── orchestrate.py
+│   ├── run-codex.sh
 │   ├── harness-log.py
+│   ├── check-agent-sync.sh
+│   ├── run-python-tests.sh
 │   └── install-hooks.sh
 ├── examples/
 │   ├── bug-report.md
 │   ├── change-request.md
 │   ├── human-escalation.md
-│   └── planner-spec.json
+│   ├── planner-spec.json
+│   └── scope-classification.json
 ├── tests/
 │   └── test_orchestrate.py
 ├── SPRINTFOUNDRY.md

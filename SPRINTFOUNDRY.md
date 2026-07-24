@@ -72,6 +72,7 @@ during a sprint is a **failure**, not an improvement.
 sprint_tests_dir:   tests/sprint/            # §2a acceptance tests, per sprint criterion
 feature_tests_dir:  tests/features/<feature> # §2b permanent feature/regression suites
 examples_dir:       examples/<feature>       # §3 runnable feature cases
+specs_dir:          specs/<capability>       # §4 living spec library
 feature_gate:       on                       # quality-gate enforces §2b+§3 on feature sprints
 ```
 
@@ -138,7 +139,42 @@ are not interchangeable, and the second is easy to skip — so it is mandatory.
 
 ---
 
-## §4. Enforcement summary — 谁检查什么
+## §4. Living Specification Library — 活规格库
+
+Sprint contracts are per-sprint and get archived, so on their own they never
+answer *"how is this system supposed to behave today?"* — you'd have to re-read
+every historical contract. The living spec library is the standing answer.
+
+- **Location**: `specs_dir` (see §1), one folder per **capability**
+  (`auth/`, `payments/`, `search/` …), each holding `spec.md`.
+- **Content**: `### Requirement:` blocks stating externally observable behaviour
+  in RFC 2119 terms (SHALL / MUST / SHOULD), each with `#### Scenario:` entries
+  in GIVEN / WHEN / THEN form. No internal classes, no implementation steps —
+  if the implementation can change without changing the spec, it doesn't belong.
+- **How it grows**: every sprint ships `spec-delta.md` declaring
+  `## ADDED / MODIFIED / REMOVED Requirements` for **one** capability. The
+  Orchestrator merges it into the capability's `spec.md` automatically on
+  `SPRINT PASS`, then archives the delta under
+  `.sprintfoundry/archive/sprint-{N}/`.
+- **Identity is the title**: `MODIFIED`/`REMOVED` must match an existing
+  requirement title exactly; `ADDED` must not collide with one. Conflicts pause
+  the harness rather than corrupting the spec — fix `spec-delta.md`, then run
+  `orchestrate.py --merge-spec-delta {N}`.
+- **Why it matters most**: the library is the **regression baseline**. During
+  CHECK the Evaluator re-verifies the existing scenarios of the capability a
+  sprint touches — so a sprint that fulfils its own contract while breaking
+  previously-specified behaviour is a `SPRINT FAIL`. Contracts alone cannot
+  catch that.
+
+Requirements marked `MODIFIED`/`REMOVED` by the current delta are exempt from the
+regression check; the delta's new version supersedes them.
+
+> Optional: a project that does not want a spec library simply never writes
+> `spec-delta.md` — the merge step is a no-op and nothing else changes.
+
+---
+
+## §5. Enforcement summary — 谁检查什么
 
 | Constraint | Author | Automatic gate | Semantic gate (Evaluator) |
 |-----------|--------|----------------|---------------------------|
@@ -146,6 +182,7 @@ are not interchangeable, and the second is easy to skip — so it is mandatory.
 | §2a Sprint acceptance tests | Generator | `test-presence` + per-criterion `Automated test:` | FAIL if any criterion's test missing/failing |
 | §2b Feature regression tests (CRUD) | Generator | `test-presence` + `feature-gate` (feature sprint must touch `feature_tests_dir`) | FAIL if the touched feature has no separate, passing regression suite |
 | §3 Feature example | Generator | `feature-gate` (feature sprint must touch `examples_dir`) | FAIL if the feature has no runnable example |
+| §4 Living spec stays accurate | Generator (delta) → Orchestrator (merge) | Deterministic merge; title conflicts pause the harness | FAIL on malformed delta (review) or on breaking an existing scenario (regression) |
 
 Two enforcement layers work together. The **quality gate**
 (`references/quality-gate.md`) is deterministic: `test-presence` requires code
@@ -157,11 +194,13 @@ actually exercise the feature and pass. A sprint must clear both.
 
 ---
 
-## §5. Sprint definition-of-done checklist (all boxes required)
+## §6. Sprint definition-of-done checklist (all boxes required)
 
 - [ ] Implementation stays within §1 architecture & tech pins.
 - [ ] §2a: every contract criterion has its own passing automated test.
 - [ ] §2b: the feature's separate regression/CRUD suite exists, is updated, and passes.
 - [ ] §3: a runnable example/case for the feature exists and runs end-to-end.
-- [ ] Quality gate PASS (lint / types / coverage / audit / test-presence).
-- [ ] Evaluator black-box CHECK PASS with no §1/§2/§3 violation.
+- [ ] §4: `spec-delta.md` written, well-formed, and merged into the living spec.
+- [ ] §4: no previously-specified scenario regressed.
+- [ ] Quality gate PASS (lint / types / coverage / audit / test-presence / feature-gate).
+- [ ] Evaluator black-box CHECK PASS with no §1–§4 violation.
