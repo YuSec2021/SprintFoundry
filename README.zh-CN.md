@@ -78,31 +78,50 @@ SprintFoundry 有严格的职责边界：
 
 ## 主流程
 
+蓝色为 Claude，橙色为 Codex，紫色为 Orchestrator，红色为阻塞式闸门，绿色为 sprint 完成。
+
 ```mermaid
 flowchart TD
-    A["用户请求 / 继续 sprint"] --> O["sf-orchestrator"]
-    O --> S["读取当前文件状态"]
-    S --> P{"planner-spec.json 存在?"}
-    P -- 否 --> SC["Planner 写 .sprintfoundry/state/scope-classification.json"]
-    SC --> PL["Planner 创建 spec、init.sh、progress log"]
-    P -- 是 --> C{"sprint-contract.md 存在?"}
-    C -- 否 --> NC["Codex 提议下一轮 sprint contract"]
-    C -- 是 --> A1{"CONTRACT APPROVED?"}
-    A1 -- 否 --> CR["Evaluator 审核 contract"]
-    A1 -- 是 --> G["Codex 只实现一个 sprint"]
-    G --> RQ["Codex 写 commit request"]
-    RQ --> T["Orchestrator 提交并写 .sprintfoundry/signals/eval-trigger.txt"]
-    T --> Q["Quality Gate: lint、类型、测试、覆盖率、安全、feature gate"]
-    Q -- 失败 --> QF["Codex 只修 quality-gate 失败项"]
-    QF --> RQ
-    Q -- 通过 --> E["Evaluator 黑盒 CHECK"]
-    E --> R{"验收结论"}
-    R -- "SPRINT PASS" --> M["合并 spec delta 进活规格库"]
-    M --> V["版本 bump、changelog、tag、清理"]
-    R -- "SPRINT FAIL" --> F{"重试超限 / 架构漂移?"}
-    F -- 可重试 --> G
-    F -- 暂停 --> H["人工接管"]
-    V --> O
+    U(["用户请求 — 新项目 / 下一个 sprint / bug-report / change-request"]) --> O
+
+    O["sf-orchestrator 技能<br/>读取文件状态，由 orchestrate.py 路由"]
+
+    O -->|无 planner-spec.json| PL["Planner · Claude<br/>SPRINTFOUNDRY.md §1 · planner-spec.json · init.sh"]
+    PL --> O
+
+    O -->|最低待办 sprint，或 target_sprint| PC["Codex · 提议<br/>sprint-contract.md + spec-delta.md"]
+    PC --> CR{"Evaluator · 契约评审"}
+    CR -->|需要修改| PC
+    CR -->|CONTRACT APPROVED · 已认证| IM
+
+    IM["Codex · 只实现一个 sprint<br/>§2a + §2b 测试、§3 案例<br/>写 commit-request"]
+    IM --> CM["Orchestrator · 校验 fence sha<br/>git commit，写 eval-trigger"]
+    CM --> QG{"质量门禁<br/>lint · 类型 · 覆盖率 · 安全审计<br/>test-presence · feature-gate"}
+    QG -->|失败| QR["Codex · 只修质量问题"]
+    QR --> CM
+    QG -->|通过| EV{"Evaluator · 黑盒 CHECK<br/>逐条 criterion 测试<br/>对照活规格做回归"}
+
+    EV -->|SPRINT FAIL| RT{"重试 ≤ 2 ?"}
+    RT -->|重试| IM
+    RT -->|超限 / 架构漂移| HP(["暂停 — needs_human"])
+
+    EV -->|SPRINT PASS · 已认证| MG["合并 spec-delta 进 specs/ 活规格库"]
+    MG --> VB["版本 bump · CHANGELOG · tag<br/>合并 sprint 分支"]
+    VB --> O
+
+    classDef claude fill:#EEEDFE,stroke:#7F77DD,stroke-width:1.5px,color:#26215C
+    classDef codex fill:#FAECE7,stroke:#D85A30,stroke-width:1.5px,color:#993C1D
+    classDef orch fill:#CECBF6,stroke:#534AB7,stroke-width:1.5px,color:#26215C
+    classDef gate fill:#FCEBEB,stroke:#D4537E,stroke-width:1.8px,color:#72243E
+    classDef good fill:#E1F5EE,stroke:#1D9E75,stroke-width:1.5px,color:#0F6E56
+    classDef neutral fill:#F1EFE8,stroke:#B4B2A9,stroke-width:1.4px,color:#2C2C2A
+
+    class U neutral
+    class O,CM orch
+    class PL,CR,EV claude
+    class PC,IM,QR codex
+    class QG,RT,HP gate
+    class MG,VB good
 ```
 
 ## 规划规模

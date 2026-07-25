@@ -78,31 +78,50 @@ Important boundaries:
 
 ## Main Flow
 
+Blue is Claude, orange is Codex, purple is the Orchestrator, red is a blocking gate, green is a completed sprint.
+
 ```mermaid
 flowchart TD
-    A["User request / continue sprint"] --> O["sf-orchestrator"]
-    O --> S["Read current file state"]
-    S --> P{"planner-spec.json exists?"}
-    P -- no --> SC["Planner writes .sprintfoundry/state/scope-classification.json"]
-    SC --> PL["Planner creates spec, init.sh, progress log"]
-    P -- yes --> C{"sprint-contract.md exists?"}
-    C -- no --> NC["Codex proposes next sprint contract"]
-    C -- yes --> A1{"CONTRACT APPROVED?"}
-    A1 -- no --> CR["Evaluator reviews contract"]
-    A1 -- yes --> G["Codex implements exactly one sprint"]
-    G --> RQ["Codex writes commit request"]
-    RQ --> T["Orchestrator commits and writes .sprintfoundry/signals/eval-trigger.txt"]
-    T --> Q["Quality Gate: lint, types, tests, coverage, security, feature gate"]
-    Q -- fail --> QF["Codex fixes only quality-gate failures"]
-    QF --> RQ
-    Q -- pass --> E["Evaluator black-box CHECK"]
-    E --> R{"Verdict"}
-    R -- "SPRINT PASS" --> M["Merge spec delta into living spec library"]
-    M --> V["Version bump, changelog, tag, cleanup"]
-    R -- "SPRINT FAIL" --> F{"retry limit / drift?"}
-    F -- retry --> G
-    F -- pause --> H["Human escalation"]
-    V --> O
+    U(["User request — new project / next sprint / bug-report / change-request"]) --> O
+
+    O["sf-orchestrator skill<br/>reads file state, routes via orchestrate.py"]
+
+    O -->|no planner-spec.json| PL["Planner · Claude<br/>SPRINTFOUNDRY.md §1 · planner-spec.json · init.sh"]
+    PL --> O
+
+    O -->|lowest pending sprint, or target_sprint| PC["Codex · propose<br/>sprint-contract.md + spec-delta.md"]
+    PC --> CR{"Evaluator · contract review"}
+    CR -->|changes required| PC
+    CR -->|CONTRACT APPROVED · attested| IM
+
+    IM["Codex · implement ONE sprint<br/>§2a + §2b tests, §3 example<br/>writes commit-request"]
+    IM --> CM["Orchestrator · verify fence sha<br/>git commit, write eval-trigger"]
+    CM --> QG{"Quality Gate<br/>lint · types · coverage · audit<br/>test-presence · feature-gate"}
+    QG -->|FAIL| QR["Codex · fix quality items only"]
+    QR --> CM
+    QG -->|PASS| EV{"Evaluator · black-box CHECK<br/>per-criterion tests<br/>regression vs living specs"}
+
+    EV -->|SPRINT FAIL| RT{"retry ≤ 2 ?"}
+    RT -->|retry| IM
+    RT -->|exhausted / architecture drift| HP(["PAUSE — needs_human"])
+
+    EV -->|SPRINT PASS · attested| MG["merge spec-delta into specs/ living library"]
+    MG --> VB["version bump · CHANGELOG · tag<br/>merge sprint branch"]
+    VB --> O
+
+    classDef claude fill:#EEEDFE,stroke:#7F77DD,stroke-width:1.5px,color:#26215C
+    classDef codex fill:#FAECE7,stroke:#D85A30,stroke-width:1.5px,color:#993C1D
+    classDef orch fill:#CECBF6,stroke:#534AB7,stroke-width:1.5px,color:#26215C
+    classDef gate fill:#FCEBEB,stroke:#D4537E,stroke-width:1.8px,color:#72243E
+    classDef good fill:#E1F5EE,stroke:#1D9E75,stroke-width:1.5px,color:#0F6E56
+    classDef neutral fill:#F1EFE8,stroke:#B4B2A9,stroke-width:1.4px,color:#2C2C2A
+
+    class U neutral
+    class O,CM orch
+    class PL,CR,EV claude
+    class PC,IM,QR codex
+    class QG,RT,HP gate
+    class MG,VB good
 ```
 
 ## Planning Scale
