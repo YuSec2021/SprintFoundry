@@ -7,15 +7,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL = ROOT / "plugins" / "sprintfoundry" / "skills" / "sf-orchestrator" / "SKILL.md"
-
-
-def extract_version_bump_script() -> str:
-    text = SKILL.read_text(encoding="utf-8")
-    section = text.split("### Version bump script", 1)[1]
-    match = re.search(r"python3 - <<'PY'\n(?P<script>.*?)\nPY\n```", section, re.DOTALL)
-    assert match is not None
-    return match.group("script")
+# The version bump used to be an inline script inside SKILL.md, which meant the
+# model had to read it into context to run it. It now lives in release.py, so
+# these tests exercise the real production code path instead of a doc excerpt.
+RELEASE = ROOT / "scripts" / "release.py"
 
 
 def run_version_bump(project_dir: Path, contract: str) -> str:
@@ -40,7 +35,9 @@ def run_version_bump(project_dir: Path, contract: str) -> str:
     )
 
     result = subprocess.run(
-        ["python3", "-c", extract_version_bump_script()],
+        ["python3", "-c",
+         f"import runpy,sys; sys.argv=['release.py']; "
+         f"m=runpy.run_path({str(RELEASE)!r}); print(m['bump_version'](2)[1])"],
         cwd=project_dir,
         capture_output=True,
         text=True,

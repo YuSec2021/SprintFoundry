@@ -579,24 +579,18 @@ def test_next_round_after_retry_routes_to_evaluator(tmp_path: Path) -> None:
     # orchestrator archived it before the Codex invocation.
     write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
 
-    # Round 2: quality gate report is missing (archived with the verdict), so
-    # the gate must run first — never straight back to another Codex retry.
+    # Round 2: the gate report is missing (archived with the verdict), so the
+    # gate runs in-process first and, on PASS, routes to the Evaluator — never
+    # straight back to another Codex retry.
     second = run_orchestrator(tmp_path, "--json")
     second_payload = json.loads(second.stdout)
-    assert second_payload["rule"] == "quality_gate_missing"
-    assert second_payload["action"] == "run_quality_gate"
-
-    write_file(tmp_path / QUALITY_DIR / "quality-gate-1.md", "**Verdict: PASS**\n")
-    attest = run_orchestrator(tmp_path, "--attest-quality", "1")
-    assert attest.returncode == 0, attest.stdout + attest.stderr
-
-    # Round 3: gate passed → must route to Evaluator, NOT another Codex retry
-    third = run_orchestrator(tmp_path, "--json")
-    third_payload = json.loads(third.stdout)
-    assert third_payload["rule"] == "eval_trigger_exists"
-    assert third_payload["action"] == "invoke_evaluator", (
+    assert (tmp_path / QUALITY_DIR / "quality-gate-1.md").exists(), (
+        "the gate must run before the Evaluator is reached"
+    )
+    assert second_payload["rule"] == "eval_trigger_exists"
+    assert second_payload["action"] == "invoke_evaluator", (
         f"expected invoke_evaluator after Codex retry, got "
-        f"{third_payload['action']} (rule={third_payload['rule']})"
+        f"{second_payload['action']} (rule={second_payload['rule']})"
     )
     run_state = json.loads((tmp_path / RUN_STATE).read_text(encoding="utf-8"))
     assert run_state["retry_count"] == 1, (
@@ -1146,16 +1140,20 @@ def test_corrupt_run_state_pauses_with_backup(tmp_path: Path) -> None:
     assert "corrupt" in state["last_failure_reason"]
 
 
-def test_quality_gate_runs_before_evaluator(tmp_path: Path) -> None:
-    """eval trigger without an eval-result and without a gate report must
-    route to run_quality_gate, not directly to the Evaluator."""
+def test_quality_gate_runs_inline_before_evaluator(tmp_path: Path) -> None:
+    """An eval trigger with no gate report must not reach the Evaluator until
+    the gate has run. The Orchestrator runs it in-process (no extra round trip)
+    and only then routes to CHECK."""
     write_spec(tmp_path / "planner-spec.json")
     write_file(tmp_path / EVAL_TRIGGER, "sprint=1")
 
     result = run_orchestrator(tmp_path, "--json")
     payload = json.loads(result.stdout)
-    assert payload["rule"] == "quality_gate_missing"
-    assert payload["action"] == "run_quality_gate"
+    assert (tmp_path / QUALITY_DIR / "quality-gate-1.md").exists(), (
+        "the gate must have produced a report in the same invocation"
+    )
+    assert payload["action"] == "invoke_evaluator"
+    assert payload["rule"] == "eval_trigger_exists"
 
 
 def test_quality_gate_fail_routes_to_quality_retry_and_archives(tmp_path: Path) -> None:
@@ -1228,23 +1226,29 @@ def test_commit_request_commits_and_writes_trigger(tmp_path: Path) -> None:
     fence = json.loads((tmp_path / SPRINT_FENCE).read_text(encoding="utf-8"))
     assert fence["contract_sha256"], "fence must record the approved contract sha"
 
-    # Phase 2: simulate Codex output + commit request
+    # Phase 2: simulate Codex output + commit request. Source ships with a test
+    # so the harness's own test-presence rule is satisfied and the gate passes.
     write_file(tmp_path / "app.py", "print('sprint 1')\n")
+    write_file(tmp_path / "test_app.py", "def test_app():\n    assert True\n")
     write_json(
         tmp_path / COMMIT_REQUESTS_DIR / "sprint-1.json",
         {
             "sprint": 1,
             "attempt": "initial",
             "commit_message": "feat(sprint-1): implement sprint one",
-            "changed_files": ["app.py"],
+            "changed_files": ["app.py", "test_app.py"],
         },
     )
 
     second = run_orchestrator(tmp_path, "--json")
     payload = json.loads(second.stdout)
     assert second.returncode == 0, second.stdout + second.stderr
-    assert payload["rule"] == "commit_request_pending"
-    assert payload["action"] == "commit_generator_output"
+    # The commit and the quality gate are mechanical: both run in this single
+    # invocation, which then routes to the first step needing an agent.
+    assert payload["action"] == "invoke_evaluator", (
+        f"expected the commit to chain through the gate to CHECK, got {payload}"
+    )
+    assert (tmp_path / QUALITY_DIR / "quality-gate-1.md").exists()
 
     assert (tmp_path / EVAL_TRIGGER).read_text(encoding="utf-8").strip() == "sprint=1"
     assert not (tmp_path / COMMIT_REQUESTS_DIR / "sprint-1.json").exists()
@@ -1367,8 +1371,10 @@ def test_unfilled_verdict_template_does_not_advance_sprint(tmp_path: Path) -> No
 
     result = run_orchestrator(tmp_path, "--json")
     payload = json.loads(result.stdout)
+    # Neither advance (pass) nor retry (fail): the sprint stays in verification,
+    # so routing proceeds through the gate to a fresh Evaluator CHECK.
     assert payload["rule"] not in {"eval_trigger_has_pass", "eval_trigger_with_fail"}
-    assert payload["rule"] == "quality_gate_missing"
+    assert payload["action"] == "invoke_evaluator"
 
 
 def test_quality_gate_template_verdict_is_fail_closed(tmp_path: Path) -> None:
@@ -1742,22 +1748,25 @@ def test_planted_quality_report_is_archived_and_gate_reruns(tmp_path: Path) -> N
     gate = tmp_path / QUALITY_DIR / "quality-gate-1.md"
     write_file(gate, "**Verdict: PASS**\n")  # planted, never attested
 
+    planted_body = gate.read_text(encoding="utf-8")
     result = run_orchestrator(tmp_path, "--json")
     payload = json.loads(result.stdout)
-    assert payload["rule"] == "quality_gate_unattested"
-    assert payload["action"] == "run_quality_gate"
-    assert not gate.exists(), "planted report must be archived, not trusted"
+
     archived = list(
         (tmp_path / ARCHIVE_DIR / "sprint-1").glob("quality-gate-unattested*.md")
     )
     assert archived, "planted report must be preserved as evidence"
+    assert archived[0].read_text(encoding="utf-8") == planted_body
 
-    # The sanctioned flow: Orchestrator runs the gate, writes and attests.
-    write_file(gate, "**Verdict: PASS**\n")
-    assert run_orchestrator(tmp_path, "--attest-quality", "1").returncode == 0
-    payload = json.loads(run_orchestrator(tmp_path, "--json").stdout)
-    assert payload["rule"] == "eval_trigger_exists"
+    # The planted verdict is never trusted: the Orchestrator re-runs the gate
+    # itself in the same invocation and the report on disk is now its own,
+    # attested output — not the planted file.
+    assert gate.exists(), "the Orchestrator's own gate run must replace it"
+    assert gate.read_text(encoding="utf-8") != planted_body, (
+        "the planted report body must not survive as the trusted report"
+    )
     assert payload["action"] == "invoke_evaluator"
+    assert payload["rule"] == "eval_trigger_exists"
 
 
 def test_commit_request_rejected_when_no_active_sprint(tmp_path: Path) -> None:

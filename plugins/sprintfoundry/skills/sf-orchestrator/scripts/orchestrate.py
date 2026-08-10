@@ -58,6 +58,16 @@ except ImportError:  # pragma: no cover - non-POSIX fallback
 RETRY_LIMIT = 2
 QUALITY_RETRY_LIMIT = 2
 SPRINT_PASS = "SPRINT PASS"
+# Static analysis on a large repo can be slow; still bounded so an unattended
+# run can never hang on a wedged linter.
+QUALITY_GATE_TIMEOUT_S = 900
+# Version bump + tag + branch merge (the merge retries with backoff).
+RELEASE_TIMEOUT_S = 300
+# Mechanical steps the Orchestrator performs itself (commit, quality gate,
+# release). Each one used to cost a full model round trip; they are now chained
+# in-process until the decision genuinely needs an agent, Codex, or a human.
+MECHANICAL_ACTIONS = {"commit_generator_output", "run_quality_gate"}
+MAX_MECHANICAL_STEPS = 5
 SPRINT_FAIL = "SPRINT FAIL"
 CONTRACT_APPROVED = "CONTRACT APPROVED"
 CODEX_EXEC_MODERN_MIN_VERSION = (0, 120, 0)
@@ -260,11 +270,12 @@ def codex_version_tuple() -> tuple[int, int, int] | None:
 def find_codex_wrapper(root: Path) -> Path | None:
     """Locate run-codex.sh (watchdog wrapper): next to this script, then in
     the target project's scripts/ dir."""
-    candidates = [
-        Path(__file__).resolve().parent / "run-codex.sh",
-        root / "scripts" / "run-codex.sh",
-    ]
-    for candidate in candidates:
+    return find_harness_script("run-codex.sh", root)
+
+
+def find_harness_script(name: str, root: Path) -> Path | None:
+    """Locate a harness script: shipped copy first, project copy as fallback."""
+    for candidate in (Path(__file__).resolve().parent / name, root / "scripts" / name):
         if candidate.exists():
             return candidate
     return None
@@ -1760,6 +1771,67 @@ class HarnessProject:
             f"merged spec delta into {target.relative_to(self.root)} ({counts})"
         )
 
+    def run_release_script(self, sprint: int) -> tuple[bool, str]:
+        """Run scripts/release.py after an attested SPRINT PASS.
+
+        Version bump, CHANGELOG/MEMORY ledger, release commit + tag, and the
+        sprint-branch merge are all mechanical. Running them here means the
+        agent never reads their source into context and spends no round trip on
+        them. Exit 2 means the merge needs a human — release.py has already
+        written needs_human plus the recovery command into run-state.
+        """
+        script = find_harness_script("release.py", self.root)
+        if script is None:
+            return False, "release.py not found next to orchestrate.py or in scripts/"
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script), "--project-dir", str(self.root),
+                 "--sprint", str(sprint)],
+                capture_output=True, text=True, cwd=str(self.root), check=False,
+                timeout=RELEASE_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            return False, f"release step timed out after {RELEASE_TIMEOUT_S}s"
+        except OSError as exc:
+            return False, f"release step could not start: {exc}"
+
+        summary = " | ".join(
+            l.strip() for l in (result.stdout or "").splitlines() if l.startswith("[")
+        ) or (result.stderr or "").strip()[-200:]
+        return result.returncode == 0, summary or f"exit {result.returncode}"
+
+    def run_quality_gate_script(self, sprint: int) -> tuple[bool, str]:
+        """Run scripts/quality_gate.py in-process and attest the report.
+
+        The gate is pure mechanism: no agent needs to read the gate's source to
+        run it, and the Orchestrator is the one running it, so it can attest the
+        result immediately. Both facts remove a model round trip per sprint.
+        """
+        script = find_harness_script("quality_gate.py", self.root)
+        if script is None:
+            return False, "quality_gate.py not found next to orchestrate.py or in scripts/"
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script), "--project-dir", str(self.root),
+                 "--sprint", str(sprint)],
+                capture_output=True, text=True, cwd=str(self.root), check=False,
+                timeout=QUALITY_GATE_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            return False, f"quality gate timed out after {QUALITY_GATE_TIMEOUT_S}s"
+        except OSError as exc:
+            return False, f"quality gate could not start: {exc}"
+
+        if not self.quality_gate_path(sprint).exists():
+            tail = (result.stderr or result.stdout or "").strip()[-300:]
+            return False, f"quality gate wrote no report (exit {result.returncode}): {tail}"
+
+        ok, message = self.attest_quality(sprint)
+        if not ok:
+            return False, f"quality report written but attestation failed: {message}"
+        verdict = parse_quality_verdict(read_text(self.quality_gate_path(sprint)))
+        return True, f"quality gate {verdict}"
+
     def quality_gate_path(self, sprint: int) -> Path:
         return self.quality_dir / f"quality-gate-{sprint}.md"
 
@@ -2497,6 +2569,115 @@ def maybe_cleanup_sprint_artifacts(project: HarnessProject, decision: RouteDecis
             project.save_run_state(state)
 
 
+def resolve_mechanical_actions(
+    project: HarnessProject, decision: RouteDecision, user_prompt: str
+) -> RouteDecision:
+    """Run Orchestrator-owned mechanical steps in-process, then re-route.
+
+    Committing a validated request and running the static quality gate need no
+    model judgement, yet each used to be returned to the caller as an action —
+    costing a full round trip (and, for the gate, forcing the agent to read the
+    gate's source into context first). They are now executed here and routing
+    continues until the decision genuinely requires an agent, a Codex run, or a
+    human. A step budget keeps a misbehaving state file from looping forever.
+    """
+    for _ in range(MAX_MECHANICAL_STEPS):
+        if decision.action not in MECHANICAL_ACTIONS:
+            return decision
+
+        # Honour any cleanup/archive instructions carried by the decision we are
+        # about to consume. Critical for the unattested-report path: the planted
+        # file must be archived as evidence *before* our own gate run replaces
+        # it, otherwise chaining would silently destroy the audit trail.
+        maybe_cleanup_sprint_artifacts(project, decision)
+
+        if decision.action == "commit_generator_output":
+            ok, message = project.execute_commit_request()
+            if not ok:
+                project.append_audit(
+                    event="commit_request_rejected", actor="orchestrator",
+                    sprint=decision.current_sprint, payload={"reason": message},
+                )
+                return RouteDecision(
+                    rule="commit_request_rejected",
+                    action="pause_for_human",
+                    rationale=f"commit request validation failed: {message}",
+                    mode="paused",
+                    current_sprint=decision.current_sprint,
+                    needs_human=True,
+                    last_failure_reason=f"Commit request rejected: {message}",
+                )
+            project.append_audit(
+                event="commit_request_executed", actor="orchestrator",
+                sprint=decision.current_sprint, payload={"message": message},
+            )
+        else:  # run_quality_gate
+            sprint = decision.current_sprint
+            ok, message = project.run_quality_gate_script(sprint)
+            project.append_audit(
+                event="quality_gate_run" if ok else "quality_gate_error",
+                actor="orchestrator", sprint=sprint, payload={"message": message},
+            )
+            if not ok:
+                return RouteDecision(
+                    rule="quality_gate_unrunnable",
+                    action="pause_for_human",
+                    rationale=f"the quality gate could not produce a report: {message}",
+                    mode="paused",
+                    current_sprint=sprint,
+                    needs_human=True,
+                    last_failure_reason=f"Quality gate could not run: {message}",
+                )
+
+        decision = decide_route(project, user_prompt, emit_audit=False)
+
+    return RouteDecision(
+        rule="mechanical_loop_exhausted",
+        action="pause_for_human",
+        rationale=(
+            f"more than {MAX_MECHANICAL_STEPS} mechanical steps in one run — "
+            "state files are likely inconsistent"
+        ),
+        mode="paused",
+        current_sprint=decision.current_sprint,
+        needs_human=True,
+        last_failure_reason="Mechanical action loop did not settle",
+    )
+
+
+def run_release_on_pass(
+    project: HarnessProject, decision: RouteDecision
+) -> RouteDecision:
+    """Version bump, tag, and sprint-branch merge for a passed sprint."""
+    if not decision.last_successful:
+        return decision
+
+    ok, message = project.run_release_script(decision.last_successful)
+    project.append_audit(
+        event="release_completed" if ok else "release_failed",
+        actor="orchestrator",
+        sprint=decision.last_successful,
+        payload={"message": message},
+    )
+    if ok:
+        decision.rationale += f" — {message}"
+        return decision
+
+    return RouteDecision(
+        rule="release_failed",
+        action="pause_for_human",
+        rationale=(
+            f"sprint {decision.last_successful} passed but the release step failed: "
+            f"{message}"
+        ),
+        mode="paused",
+        current_sprint=decision.current_sprint,
+        needs_human=True,
+        last_failure_reason=f"Release step failed: {message}",
+        last_successful=decision.last_successful,
+    )
+
+
 def merge_spec_delta_on_pass(
     project: HarnessProject, decision: RouteDecision
 ) -> RouteDecision:
@@ -2520,7 +2701,7 @@ def merge_spec_delta_on_pass(
     if ok:
         if not message.startswith("no spec delta"):
             decision.rationale += f" — {message}"
-        return decision
+        return run_release_on_pass(project, decision)
 
     return RouteDecision(
         rule="spec_delta_conflict",
@@ -2593,6 +2774,96 @@ def attach_codex_prompt_file(project: HarnessProject, decision: RouteDecision, w
     )
 
 
+def print_snapshot(project: HarnessProject) -> int:
+    """One-call session startup: everything the Orchestrator used to gather
+    with six separate inline scripts.
+
+    Prints the current artifact state, the derived session values, and any
+    guard warnings (needs_human, branch mismatch, unmerged passed sprint).
+    Keeping this in code instead of SKILL.md keeps ~160 lines of shell out of
+    the model's context on every session.
+    """
+    root = project.root
+    out: list[str] = [f"SPRINTFOUNDRY_PROJECT_ROOT={root}"]
+
+    def show(label: str, path: Path, tail: int | None = None, head: int | None = None) -> None:
+        if not path.exists():
+            out.append(f"[no {label}]")
+            return
+        text = read_text(path).rstrip("\n")
+        lines = text.splitlines()
+        if tail:
+            lines = lines[-tail:]
+        if head:
+            lines = lines[:head]
+        out.append(f"--- {label} ---\n" + "\n".join(lines))
+
+    show("SPRINTFOUNDRY.md", root / "SPRINTFOUNDRY.md")
+    show("VERSION", root / "VERSION")
+    show("MEMORY.md (tail)", root / "MEMORY.md", tail=15)
+    show("run-state.json", project.run_state_path)
+    show("claude-progress.txt", project.progress_path, tail=20)
+    show("sprint-contract.md (head)", project.contract_path, head=5)
+    show("spec-delta.md (head)", project.spec_delta_path, head=6)
+
+    specs = sorted(project_specs_dir(root).glob("*/spec.md"))
+    out.append("--- living specs ---\n" + ("\n".join(
+        f"{p.relative_to(root)} ({len(_REQ_HEADING.findall(read_text(p)))} requirements)"
+        for p in specs) if specs else "[none yet]"))
+
+    evals = sorted(project.eval_results())
+    out.append("--- eval results ---\n" + ("\n".join(
+        f"sprint {eval_sprint_id(p)}: {parse_sprint_verdict(read_text(p))}" for p in evals
+    ) if evals else "[none yet]"))
+
+    # Derived session values (were a separate inline python block).
+    version = "0.0.0"
+    vf = root / "VERSION"
+    if vf.exists():
+        version = read_text(vf).strip().lstrip("v") or "0.0.0"
+    max_sprint = 0
+    if project.spec_path.exists():
+        try:
+            max_sprint = max(
+                (int(s["id"]) for s in project.planner_spec().get("sprints", [])),
+                default=0,
+            )
+        except (ValueError, KeyError, json.JSONDecodeError):
+            pass
+    pending = project.pending_sprints() if project.spec_path.exists() else []
+    out.append(
+        "--- session values ---\n"
+        f"SESSION_CURRENT_VERSION={version}\n"
+        f"SESSION_MAX_SPRINT_ID={max_sprint}\n"
+        f"SESSION_NEXT_SPRINT_ID={max_sprint + 1}\n"
+        f"PENDING_SPRINTS={pending or '[]'}"
+    )
+
+    # Guards (were three more inline blocks).
+    warnings: list[str] = []
+    state = project.load_run_state()
+    if state.get("needs_human"):
+        warnings.append(
+            f"needs_human=true — {state.get('last_failure_reason') or 'no reason recorded'}. "
+            "Do not route any agent until a human clears it."
+        )
+    recorded = str(state.get("active_branch") or "")
+    actual = project.current_branch()
+    if recorded and actual and recorded != actual:
+        warnings.append(f"branch mismatch: run-state={recorded!r} but HEAD={actual!r}")
+    passed = int(state.get("last_successful_sprint", 0) or 0)
+    base = str(state.get("base_branch") or "main")
+    if passed and recorded and recorded != base:
+        warnings.append(
+            f"sprint {passed} passed but active_branch={recorded!r} != base={base!r} "
+            "— the sprint branch may never have merged"
+        )
+    out.append("--- guards ---\n" + ("\n".join(f"WARNING: {w}" for w in warnings)
+                                     if warnings else "ok"))
+    print("\n\n".join(out))
+    return 2 if state.get("needs_human") else 0
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-dir", default=".", help="Target project directory.")
@@ -2604,6 +2875,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Compute the routing decision without writing logs, state, cleanup files, or switching branches.",
     )
     parser.add_argument("--json", action="store_true", help="Print decision as JSON.")
+    parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help=(
+            "Print the full session-startup snapshot (artifact state, derived "
+            "session values, and guard warnings) and exit. Exit 2 when "
+            "needs_human is set."
+        ),
+    )
+    parser.add_argument(
+        "--after-evaluator",
+        type=int,
+        metavar="SPRINT",
+        help=(
+            "Attest the verdict the Evaluator sub-agent just produced for SPRINT "
+            "and route in the same call. Use this instead of --attest-eval + a "
+            "separate routing run; it removes one model round trip per sprint. "
+            "Only ever pass a sprint whose Evaluator you just ran."
+        ),
+    )
+    parser.add_argument(
+        "--after-contract-review",
+        action="store_true",
+        help=(
+            "Attest the contract approval the Evaluator sub-agent just produced "
+            "and route in the same call (replaces --attest-contract + a separate "
+            "routing run)."
+        ),
+    )
     parser.add_argument(
         "--merge-spec-delta",
         type=int,
@@ -2674,6 +2974,9 @@ def main(argv: list[str]) -> int:
             # decision see the same attestation state.
             project.bootstrap_attestations()
 
+        if args.snapshot:
+            return print_snapshot(project)
+
         if args.merge_spec_delta is not None:
             ok, message = project.merge_spec_delta_file(args.merge_spec_delta)
             project.append_audit(
@@ -2731,30 +3034,34 @@ def main(argv: list[str]) -> int:
                   else f"attest_quality sprint={args.attest_quality}: {message}")
             return 0 if ok else 1
 
+        # Combined attest-and-route: the Orchestrator has just received a
+        # sub-agent's output, so attesting and routing in one call is safe and
+        # saves a full model round trip. A failed attestation stops here rather
+        # than routing on an untrusted artifact.
+        for flag, label, attest in (
+            (args.after_evaluator is not None, "eval", lambda: project.attest_eval(args.after_evaluator)),
+            (args.after_contract_review, "contract", project.attest_contract),
+        ):
+            if not flag:
+                continue
+            ok, message = attest()
+            if not ok:
+                payload = {
+                    "project_dir": str(project.root),
+                    "action": f"attest_{label}",
+                    "ok": False,
+                    "message": message,
+                }
+                print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json
+                      else f"attest_{label}: {message}")
+                return 1
+
         if not args.check_only:
             compress_progress(project.progress_path)
         decision = decide_route(project, args.user_prompt, emit_audit=not args.check_only)
 
-        if decision.action == "commit_generator_output" and not args.check_only:
-            ok, message = project.execute_commit_request()
-            if ok:
-                decision.rationale += f" — {message}"
-            else:
-                project.append_audit(
-                    event="commit_request_rejected",
-                    actor="orchestrator",
-                    sprint=decision.current_sprint,
-                    payload={"reason": message},
-                )
-                decision = RouteDecision(
-                    rule="commit_request_rejected",
-                    action="pause_for_human",
-                    rationale=f"commit request validation failed: {message}",
-                    mode="paused",
-                    current_sprint=decision.current_sprint,
-                    needs_human=True,
-                    last_failure_reason=f"Commit request rejected: {message}",
-                )
+        if not args.check_only:
+            decision = resolve_mechanical_actions(project, decision, args.user_prompt)
 
         if not args.check_only:
             decision = prepare_branch_for_decision(project, decision)
