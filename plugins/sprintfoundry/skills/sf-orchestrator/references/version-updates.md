@@ -390,36 +390,10 @@ The Orchestrator surfaces the version choice to the user — do not pick it auto
 
 ### Changelog generation
 
-```bash
-python3 - <<'PY'
-import pathlib, re
-
-results = sorted(
-    [
-        *pathlib.Path(".").glob(".sprintfoundry/results/eval/eval-result-*.md"),
-        *pathlib.Path(".").glob("eval-result-*.md"),
-    ],
-    key=lambda p: int(re.search(r"\d+", p.stem).group())
-)
-
-lines = ["# Changelog\n"]
-for r in results:
-    text = r.read_text(errors="ignore")
-    sprint_match = re.search(r"Sprint (\d+)", text)
-    sprint_id = sprint_match.group(1) if sprint_match else "?"
-    verdict = "PASS" if "SPRINT PASS" in text else "FAIL"
-    title_match = re.search(r"## Sprint \d+: (.+)", text)
-    title = title_match.group(1) if title_match else ""
-
-    lines.append(f"## Sprint {sprint_id}{' — ' + title if title else ''} [{verdict}]")
-    for obs in re.findall(r"Observation: (.+)", text):
-        lines.append(f"- {obs.strip()}")
-    lines.append("")
-
-pathlib.Path("CHANGELOG.md").write_text("\n".join(lines))
-print("CHANGELOG.md written")
-PY
-```
+Handled automatically by `scripts/release.py` on every `SPRINT PASS`: it appends
+a `## v{version} — Sprint {N} [{BUMP}]` section built from the verdict's
+`Observation:` lines, alongside the `VERSION` and `MEMORY.md` ledger updates.
+Nothing to run by hand.
 
 ### Tagging procedure (Orchestrator runs, after user confirms version)
 

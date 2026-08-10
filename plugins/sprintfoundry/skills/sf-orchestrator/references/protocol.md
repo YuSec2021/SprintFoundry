@@ -16,7 +16,7 @@ State lives in files, never in conversation memory.
 | `.sprintfoundry/results/eval/eval-result-{N}.md` | Evaluator | Per-sprint scores and critique; kept out of the project root. A PASS only counts when Orchestrator-attested (`--attest-eval N`) |
 | `.sprintfoundry/signals/commit-requests/sprint-{N}.json` | Generator | Request for Orchestrator-owned commit and trigger creation |
 | `.sprintfoundry/signals/eval-trigger.txt` | Orchestrator | Signal file: `sprint=N` or `sprint=N-retry` written after Orchestrator commit |
-| `.sprintfoundry/results/quality/quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK. Only counts when Orchestrator-attested (`--attest-quality N`); an unattested report is archived and the gate re-runs |
+| `.sprintfoundry/results/quality/quality-gate-{N}.md` | Orchestrator | Static quality gate result before Evaluator CHECK. Attested automatically when `orchestrate.py` runs the gate; an unattested report is archived and the gate re-runs |
 | `.sprintfoundry/state/sprint-fence.json` | Orchestrator | Records expected sprint + base git commit + approved-contract sha before Codex starts. Mirrored into the external attestation store when written — a deleted/rewritten fence rejects the commit and pauses (fail-closed) |
 | `~/.sprintfoundry/attest/<project-hash>.json` | Orchestrator | **External attestation store (outside the project root)** — HMAC records for eval verdicts, the contract approval, quality-gate reports, and the sprint fence. Unwritable from inside the default Codex workspace-write sandbox, so the Generator cannot self-certify any trust point |
 | `.sprintfoundry/state/run-state.json` | Orchestrator | Unattended mode state, retry counters, pause/escalation flags |
@@ -45,7 +45,7 @@ After initial planning, all new work is classified before Generator sees it:
 3. IMPLEMENT   Codex implements Sprint N ONLY → writes commit request → STOPS
                Orchestrator validates (fence integrity, fence sha, branch,
                protected paths), commits, writes .sprintfoundry/signals/eval-trigger.txt
-               Quality gate runs → Orchestrator attests the report (--attest-quality N)
+               Orchestrator runs the gate and attests it in the same call
 4. EVALUATE    Evaluator runs black-box CHECK → writes .sprintfoundry/results/eval/eval-result-N.md
                Orchestrator attests the verdict (--attest-eval N)
 
