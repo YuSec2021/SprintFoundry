@@ -38,6 +38,23 @@ build/
 plugins/plugins_tmp/
 .claude/worktrees/
 
+# ── Local-only agent/skill mirrors ───────────────────────────────────────────
+# The plugin source of truth is plugins/sprintfoundry/{agents,skills}/, and
+# .claude/agents/ is held identical to it by scripts/check-agent-sync.sh.
+# These two extra copies are local conveniences that nothing syncs or ships;
+# tracking them would keep alive the four-copy drift problem recorded in
+# docs/harness-engineering-review.md.
+.agents/
+.codex/
+
+# ── Local assistant / tool scratch state ─────────────────────────────────────
+.workbuddy/
+
+# ── Superseded diagram ───────────────────────────────────────────────────────
+# The authoritative architecture diagram is the mermaid block in README.md,
+# which renders on GitHub and cannot drift from a separately maintained image.
+docs/architecture-flow.svg
+
 # ── Binary build artifacts (released via GitHub Releases, not committed) ──────
 *.plugin
 *.skill
