@@ -4,6 +4,8 @@
 
 SprintFoundry 是一个面向 AI 软件交付的 Claude Code plugin。它封装了一套三代理 sprint harness：Claude 负责规划、路由和独立验收，Codex CLI 负责真实代码实现。
 
+当前版本：[v3.0.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.0.0) · [下载 `sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.0.0/sprintfoundry.plugin)
+
 这个仓库现在主要是 plugin 源码与发布仓库。标准运行入口是 plugin skill：
 
 ```text
@@ -25,6 +27,10 @@ plugins/sprintfoundry/
 └── skills/
     ├── sf-orchestrator/
     │   ├── SKILL.md
+    │   ├── scripts/
+    │   │   ├── orchestrate.py
+    │   │   ├── quality_gate.py
+    │   │   └── release.py
     │   └── references/
     │       ├── evaluator-agent.md
     │       ├── generator-rules.md
@@ -55,6 +61,12 @@ plugin 内包含：
 | `branching` skill | 每个 sprint 一条分支，以及 active branch 恢复 |
 | `observability` skill | 运行状态、事件日志、暂停/人工接管摘要、上下文清洁 |
 
+## v3 执行架构
+
+v3 将确定性的机械工作收进脚本边界，让模型只参与真正需要判断的环节。`orchestrate.py` 现在会在进程内串联已验证的 commit request、质量门禁执行与认证、Evaluator 后续路由、spec-delta 合并和发布交接；`quality_gate.py` 负责静态质量检查，`release.py` 负责版本产物、发布 commit 与 tag，以及 sprint 分支合并。
+
+组合入口 `--snapshot`、`--after-contract-review` 和 `--after-evaluator` 取代了重复的状态读取与认证往返。实测完整 happy path 的 Orchestrator 调用从 11 次降至 4 次。通过移除内嵌可执行代码，`sf-orchestrator/SKILL.md` 从 1019 行缩减到 245 行（约 11.8k 降至 2.9k tokens），同时不削弱 contract approval、质量门禁、黑盒 CHECK、attestation 或 fence 闸门。
+
 ## 运行模型
 
 SprintFoundry 有严格的职责边界：
@@ -64,7 +76,7 @@ SprintFoundry 有严格的职责边界：
 | Planner | Claude sub-agent | 先判定项目规模，再将需求转成产品方向、验证模式和 sprint 计划 |
 | Generator | Codex CLI | 实现一个已批准 sprint，自检，并写入 commit request |
 | Evaluator | Claude sub-agent + 验证工具 | 审核 contract，并通过配置的外部表面验证已提交工作 |
-| Orchestrator | `sf-orchestrator` skill | 读取文件状态、调用代理、负责 Git commit 和 `.sprintfoundry/signals/eval-trigger.txt`，并在不安全状态下暂停 |
+| Orchestrator | `sf-orchestrator` skill + 本地脚本 | 读取文件状态，仅在需要判断时调用代理，在进程内完成机械动作，负责 Git commit 和 `.sprintfoundry/signals/eval-trigger.txt`，并在不安全状态下暂停 |
 
 关键边界：
 
@@ -95,8 +107,8 @@ flowchart TD
     CR -->|CONTRACT APPROVED · 已认证| IM
 
     IM["Codex · 只实现一个 sprint<br/>§2a + §2b 测试、§3 案例<br/>写 commit-request"]
-    IM --> CM["Orchestrator · 校验 fence sha<br/>git commit，写 eval-trigger"]
-    CM --> QG{"质量门禁<br/>lint · 类型 · 覆盖率 · 安全审计<br/>test-presence · feature-gate"}
+    IM --> CM["orchestrate.py · 进程内<br/>校验 fence · commit · 写 eval-trigger"]
+    CM --> QG{"quality_gate.py · 进程内<br/>lint · 类型 · 覆盖率 · 安全审计<br/>test-presence · feature-gate"}
     QG -->|失败| QR["Codex · 只修质量问题"]
     QR --> CM
     QG -->|通过| EV{"Evaluator · 黑盒 CHECK<br/>逐条 criterion 测试<br/>对照活规格做回归"}
@@ -105,8 +117,8 @@ flowchart TD
     RT -->|重试| IM
     RT -->|超限 / 架构漂移| HP(["暂停 — needs_human"])
 
-    EV -->|SPRINT PASS · 已认证| MG["合并 spec-delta 进 specs/ 活规格库"]
-    MG --> VB["版本 bump · CHANGELOG · tag<br/>合并 sprint 分支"]
+    EV -->|SPRINT PASS| MG["orchestrate.py --after-evaluator<br/>认证 · 合并 spec-delta"]
+    MG --> VB["release.py · 版本 · CHANGELOG · tag<br/>合并 sprint 分支"]
     VB --> O
 
     classDef claude fill:#EEEDFE,stroke:#7F77DD,stroke-width:1.5px,color:#26215C
@@ -123,6 +135,8 @@ flowchart TD
     class QG,RT,HP gate
     class MG,VB good
 ```
+
+确定性节点会在同一个本地进程中继续执行，直到下一步需要 Planner、Codex、Evaluator 或人工判断。每次转换仍会写入并审计相同的文件状态产物，因此崩溃恢复和信任校验保持显式可查。
 
 ## 规划规模
 
@@ -214,6 +228,8 @@ SprintFoundry 是文件驱动状态机。Orchestrator 总是优先相信当前�
 
 运行态文件统一放在 `.sprintfoundry/`。旧版根目录 `run-state.json`、`eval-trigger.txt`、`sprint-fence.json`、`eval-result-*.md` 和 `quality-gate-*.md` 可迁移或兼容读取，但新的机器产物不应再写到项目根目录。
 
+在 v3 中，文件状态仍是权威事实，确定性转换则由进程内连续完成。`orchestrate.py --snapshot` 通过一次调用推导当前路由；`--after-contract-review` 和 `--after-evaluator` 会认证 sub-agent 产物并继续路由，不再消耗单独的模型轮次。报告、认证、归档和审计事件仍会在下一个状态被消费前写入磁盘。
+
 Sprint 进度按集合计算：eval result 必须包含独立的 `SPRINT PASS` 判定行，并与项目外 `~/.sprintfoundry/attest/` 中的 Orchestrator 签名一致。引用文字、未填写的 `SPRINT PASS / SPRINT FAIL` 模板、未签名或签名后被修改的 PASS 文件都不会推进进度。默认路由选择 ID 最小且尚未通过的 sprint；如需乱序执行，可在 `run-state.json` 设置 `target_sprint`，或向 `.sprintfoundry/signals/target-sprint.txt` 写入 `sprint=N`。
 
 Codex 交接现在由本地文件承载：Orchestrator 调用 Codex 前，会先把当前 sprint 的完整指令写入 `.sprintfoundry/prompts/`，命令行只传一个“读取这个本地 prompt 文件”的短包装指令。retry prompt 也会先把 Evaluator 失败详情嵌入该文件，再删除过期的 eval-result，因此重试不依赖已删除状态。
@@ -249,11 +265,13 @@ Orchestrator 会在项目根目录之外为 contract approval、quality-gate 报
 - 普通 feature / minor feature -> minor
 - major feature / replan / 明确的 breaking-change 信号 -> major
 
-流程定义在 `references/version-updates.md` 中，会在消费项目里写入 `VERSION`、`CHANGELOG.md` 和 Git tag。
+版本策略定义在 `references/version-updates.md` 中。通过认证的 `SPRINT PASS` 出现后，`release.py` 会写入 `VERSION`、`CHANGELOG.md` 和 Git tag，再把 sprint 分支合并回基础分支。
 
 ## 发布
 
 完整 plugin 源码提交在 `plugins/sprintfoundry` 下。
+
+最新打包版本是 [SprintFoundry v3.0.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.0.0)。可从 GitHub Releases 下载已就绪的 [`sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.0.0/sprintfoundry.plugin) 安装包。
 
 构建可分发 plugin 包：
 
@@ -293,6 +311,8 @@ CI 工作流 `.github/workflows/validate-plugins.yml` 会校验：
 ├── scripts/
 │   ├── package_plugin.sh
 │   ├── orchestrate.py
+│   ├── quality_gate.py
+│   ├── release.py
 │   ├── run-codex.sh
 │   ├── harness-log.py
 │   ├── check-agent-sync.sh

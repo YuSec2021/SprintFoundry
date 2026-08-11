@@ -4,6 +4,8 @@
 
 SprintFoundry is a Claude Code plugin for AI-driven software delivery. It packages a three-agent sprint harness where Claude plans, routes, and independently evaluates work, while Codex CLI performs the actual implementation.
 
+Current release: [v3.0.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.0.0) · [Download `sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.0.0/sprintfoundry.plugin)
+
 This repository is now primarily a plugin source and release repository. The canonical runtime entrypoint is the plugin skill:
 
 ```text
@@ -25,6 +27,10 @@ plugins/sprintfoundry/
 └── skills/
     ├── sf-orchestrator/
     │   ├── SKILL.md
+    │   ├── scripts/
+    │   │   ├── orchestrate.py
+    │   │   ├── quality_gate.py
+    │   │   └── release.py
     │   └── references/
     │       ├── evaluator-agent.md
     │       ├── generator-rules.md
@@ -55,6 +61,12 @@ The plugin contains:
 | `branching` skill | One-branch-per-sprint workflow and active branch recovery |
 | `observability` skill | Run state, event logs, pause/escalation summaries, and context hygiene |
 
+## v3 Execution Architecture
+
+Version 3 moves deterministic work behind the script boundary so the model is used only where judgment is required. `orchestrate.py` now chains validated commit requests, quality-gate execution and attestation, post-Evaluator routing, spec-delta merging, and release handoff in-process. `quality_gate.py` owns static quality checks, while `release.py` owns version artifacts, release commits and tags, and sprint-branch merging.
+
+The combined entry points `--snapshot`, `--after-contract-review`, and `--after-evaluator` replace repeated state-reading and attestation round trips. On the measured happy path, a complete sprint now needs 4 Orchestrator calls instead of 11. `sf-orchestrator/SKILL.md` was reduced from 1019 to 245 lines (about 11.8k to 2.9k tokens) by removing embedded executable code, without weakening contract approval, quality, black-box CHECK, attestation, or fence gates.
+
 ## Runtime Model
 
 SprintFoundry uses a strict separation of responsibility:
@@ -64,7 +76,7 @@ SprintFoundry uses a strict separation of responsibility:
 | Planner | Claude sub-agent | Classifies scope, then turns a request into product direction, verification mode, and sprint plan |
 | Generator | Codex CLI | Implements one approved sprint, self-checks, and writes a commit request |
 | Evaluator | Claude sub-agent + verification tools | Reviews contracts and verifies committed work through the configured external surface |
-| Orchestrator | `sf-orchestrator` skill | Reads file state, invokes agents, owns Git commits and `.sprintfoundry/signals/eval-trigger.txt`, and pauses on unsafe state |
+| Orchestrator | `sf-orchestrator` skill + local scripts | Reads file state, invokes agents for judgment, resolves mechanical actions in-process, owns Git commits and `.sprintfoundry/signals/eval-trigger.txt`, and pauses on unsafe state |
 
 Important boundaries:
 
@@ -95,8 +107,8 @@ flowchart TD
     CR -->|CONTRACT APPROVED · attested| IM
 
     IM["Codex · implement ONE sprint<br/>§2a + §2b tests, §3 example<br/>writes commit-request"]
-    IM --> CM["Orchestrator · verify fence sha<br/>git commit, write eval-trigger"]
-    CM --> QG{"Quality Gate<br/>lint · types · coverage · audit<br/>test-presence · feature-gate"}
+    IM --> CM["orchestrate.py · in-process<br/>verify fence · commit · write eval-trigger"]
+    CM --> QG{"quality_gate.py · in-process<br/>lint · types · coverage · audit<br/>test-presence · feature-gate"}
     QG -->|FAIL| QR["Codex · fix quality items only"]
     QR --> CM
     QG -->|PASS| EV{"Evaluator · black-box CHECK<br/>per-criterion tests<br/>regression vs living specs"}
@@ -105,8 +117,8 @@ flowchart TD
     RT -->|retry| IM
     RT -->|exhausted / architecture drift| HP(["PAUSE — needs_human"])
 
-    EV -->|SPRINT PASS · attested| MG["merge spec-delta into specs/ living library"]
-    MG --> VB["version bump · CHANGELOG · tag<br/>merge sprint branch"]
+    EV -->|SPRINT PASS| MG["orchestrate.py --after-evaluator<br/>attest · merge spec-delta"]
+    MG --> VB["release.py · version · CHANGELOG · tag<br/>merge sprint branch"]
     VB --> O
 
     classDef claude fill:#EEEDFE,stroke:#7F77DD,stroke-width:1.5px,color:#26215C
@@ -123,6 +135,8 @@ flowchart TD
     class QG,RT,HP gate
     class MG,VB good
 ```
+
+The deterministic nodes continue within one local process until another Planner, Codex, Evaluator, or human decision is required. Every transition still writes and audits the same file-state artifacts, so crash recovery and trust checks remain explicit.
 
 ## Planning Scale
 
@@ -215,6 +229,8 @@ SprintFoundry is a file-driven state machine. The orchestrator always prefers cu
 
 Runtime state lives under `.sprintfoundry/`. Legacy root-level `run-state.json`, `eval-trigger.txt`, `sprint-fence.json`, `eval-result-*.md`, and `quality-gate-*.md` may be migrated or read for compatibility, but new machine artifacts should not be written to the project root.
 
+In v3, file state remains authoritative while deterministic transitions are resolved in-process. `orchestrate.py --snapshot` derives the current route in one call; `--after-contract-review` and `--after-evaluator` attest sub-agent artifacts and continue routing without a separate model turn. Reports, attestations, archives, and audit events are still written before the next state is consumed.
+
 Sprint progress is set-based: a sprint is complete only when its eval result has a dedicated `SPRINT PASS` verdict line and the file matches an Orchestrator attestation stored outside the project under `~/.sprintfoundry/attest/`. Quoted verdict text, an unfilled `SPRINT PASS / SPRINT FAIL` template, and modified or unattested PASS files do not advance progress. The default router selects the lowest-ID non-skipped sprint without a PASS, so a lower-ID sprint left unpassed after a higher-ID sprint passes remains pending instead of being buried or renumbered. To deliberately run a specific pending sprint out of order, set `target_sprint` in `.sprintfoundry/state/run-state.json` or write `sprint=N` to `.sprintfoundry/signals/target-sprint.txt`; the override is ignored once that sprint is no longer pending.
 
 Codex handoffs are file-backed: before invoking Codex, the Orchestrator writes the complete sprint-specific instructions to `.sprintfoundry/prompts/` and passes only a short "read this local prompt file" wrapper on the command line. Retry prompts also embed the Evaluator failure details in this file before stale eval-result files are removed, so retries do not depend on deleted state.
@@ -250,11 +266,13 @@ After every `SPRINT PASS`, SprintFoundry can apply an automatic semantic version
 - normal feature / minor feature -> minor
 - major feature / replan / explicit breaking-change signal -> major
 
-The flow is defined in `references/version-updates.md` and writes `VERSION`, `CHANGELOG.md`, and a Git tag in the consuming project.
+The policy is defined in `references/version-updates.md`. After an attested `SPRINT PASS`, `release.py` writes `VERSION`, `CHANGELOG.md`, and the Git tag, then merges the sprint branch into its base branch.
 
 ## Publishing
 
 The complete plugin source is committed under `plugins/sprintfoundry`.
+
+The latest packaged release is [SprintFoundry v3.0.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.0.0). Download the ready-to-install [`sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.0.0/sprintfoundry.plugin) artifact from GitHub Releases.
 
 Build a distributable plugin archive:
 
@@ -294,6 +312,8 @@ The CI workflow `.github/workflows/validate-plugins.yml` validates:
 ├── scripts/
 │   ├── package_plugin.sh
 │   ├── orchestrate.py
+│   ├── quality_gate.py
+│   ├── release.py
 │   ├── run-codex.sh
 │   ├── harness-log.py
 │   ├── check-agent-sync.sh
