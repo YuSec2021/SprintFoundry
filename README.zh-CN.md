@@ -4,7 +4,7 @@
 
 SprintFoundry 是一个面向 AI 软件交付的 Claude Code plugin。它封装了一套三代理 sprint harness：Claude 负责规划、路由和独立验收，Codex CLI 负责真实代码实现。
 
-当前版本：[v3.0.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.0.0) · [下载 `sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.0.0/sprintfoundry.plugin)
+当前版本：[v3.1.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.1.0) · [下载 `sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.1.0/sprintfoundry.plugin)
 
 这个仓库现在主要是 plugin 源码与发布仓库。标准运行入口是 plugin skill：
 
@@ -274,7 +274,7 @@ Orchestrator 会在项目根目录之外为 contract approval、quality-gate 报
 
 完整 plugin 源码提交在 `plugins/sprintfoundry` 下。
 
-最新打包版本是 [SprintFoundry v3.0.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.0.0)。可从 GitHub Releases 下载已就绪的 [`sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.0.0/sprintfoundry.plugin) 安装包。
+最新打包版本是 [SprintFoundry v3.1.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.1.0)。可从 GitHub Releases 下载已就绪的 [`sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.1.0/sprintfoundry.plugin) 安装包。
 
 构建可分发 plugin 包：
 

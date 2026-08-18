@@ -4,7 +4,7 @@
 
 SprintFoundry is a Claude Code plugin for AI-driven software delivery. It packages a three-agent sprint harness where Claude plans, routes, and independently evaluates work, while Codex CLI performs the actual implementation.
 
-Current release: [v3.0.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.0.0) · [Download `sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.0.0/sprintfoundry.plugin)
+Current release: [v3.1.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.1.0) · [Download `sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.1.0/sprintfoundry.plugin)
 
 This repository is now primarily a plugin source and release repository. The canonical runtime entrypoint is the plugin skill:
 
@@ -275,7 +275,7 @@ The policy is defined in `references/version-updates.md`. After an attested `SPR
 
 The complete plugin source is committed under `plugins/sprintfoundry`.
 
-The latest packaged release is [SprintFoundry v3.0.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.0.0). Download the ready-to-install [`sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.0.0/sprintfoundry.plugin) artifact from GitHub Releases.
+The latest packaged release is [SprintFoundry v3.1.0](https://github.com/YuSec2021/sprintfoundry/releases/tag/v3.1.0). Download the ready-to-install [`sprintfoundry.plugin`](https://github.com/YuSec2021/sprintfoundry/releases/download/v3.1.0/sprintfoundry.plugin) artifact from GitHub Releases.
 
 Build a distributable plugin archive:
 
