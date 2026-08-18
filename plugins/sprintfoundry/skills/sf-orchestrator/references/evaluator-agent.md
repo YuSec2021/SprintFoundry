@@ -100,6 +100,32 @@ fi
 
 Compare diff against sprint contract. Flag unrequested files or behaviour as a Craft defect. Scope violations do not auto-fail but lower Craft score.
 
+### Reuse and duplication review (mandatory)
+
+Read the `duplication` section of
+`.sprintfoundry/results/quality/quality-gate-{N}.md`. Treat clone pairs as
+evidence to investigate, never automatic proof. Review the changed flow in this
+order and stop at the first layer that already satisfies the contract:
+
+1. Existing repository helper/type/component/query/pattern (search definitions
+   and callers, not just matching names)
+2. Language standard library
+3. Native browser/platform/database/framework capability
+4. Already-installed dependency from the project's manifests
+5. Minimum new code or a justified new dependency
+
+Use tags `repo-reuse`, `stdlib`, `native`, `installed-dep`, `yagni`, and
+`shrink`. Clear, substantial reimplementation without a concrete compatibility,
+security, measured-performance, licensing, bundle-size, or platform-support
+constraint is **SPRINT FAIL**. Ambiguous or minor opportunities lower Craft but
+do not fail automatically. Never demand a dependency for a few clear lines, and
+never simplify away validation, security, accessibility, or data-loss handling.
+
+Write a `## Reuse Review` table in the eval result with repository searches,
+stdlib/native APIs, dependency-manifest evidence, and the disposition of each
+duplication candidate. Independently verify the evidence; do not trust a
+Generator assertion by itself.
+
 ### Per-criterion automated test (mandatory, before functional evaluation)
 
 For **every** success criterion, run the command from its `Automated test:` line:
@@ -183,6 +209,10 @@ exercise the feature and pass.)
 - 存在明显的 patch-on-patch 堆叠（同一逻辑被修补超过两次）
 - 存在未使用的 import、变量、或导出
 - 测试文件与实现文件不对称（实现有新逻辑但测试没有对应覆盖）
+- 存在未解释的仓库内重复实现，或手写了标准库、平台能力、已安装依赖已有的行为
+
+Originality 只评价产品、交互和领域决策。重写标准库、平台能力或依赖不是原创性，
+不得因此提高分数。
 
 Scoring anchors:
 
@@ -213,6 +243,17 @@ Date: {ISO timestamp}
 | Originality     | {X}/10 | ≥ 6       | PASS/FAIL |
 | Craft           | {X}/10 | ≥ 7       | PASS/FAIL |
 | Functionality   | {X}/10 | ≥ 8       | PASS/FAIL |
+
+## Reuse Review
+
+| Layer | Evidence checked | Conclusion |
+|-------|------------------|------------|
+| Repository | {paths/symbols searched} | reused / justified / violation / N/A |
+| Standard library | {APIs checked} | reused / justified / violation / N/A |
+| Native platform | {capabilities checked} | reused / justified / violation / N/A |
+| Installed dependencies | {manifest entries/APIs checked} | reused / justified / violation / N/A |
+
+Duplication evidence: {none / candidate locations and disposition}
 
 ## Verdict: SPRINT PASS / SPRINT FAIL
 

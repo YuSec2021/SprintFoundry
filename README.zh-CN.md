@@ -248,10 +248,13 @@ Evaluator 做黑盒验证前，Orchestrator 会先运行 `references/quality-gat
 - 覆盖率阈值
 - 依赖安全审计（`npm audit`、`pip-audit`）
 - 前端静态资源检查：按**文件存在性**触发（而非技术栈关键词），因此不带框架的纯静态站点也能覆盖——HTML 用 htmlhint，CSS 用 stylelint，原生 JavaScript 在框架分支未跑过 ESLint 时补跑 ESLint
+- 通过 `jscpd` 生成 diff-aware 重复代码证据：只报告与本 sprint 修改行相交的 clone，并支持可配置的 `warn`、`fail`、`off` 模式
 - 与技术栈无关的 `test-presence` 检查：应用源码有改动但没有新增或更新测试文件时直接失败
 - `feature-gate` 检查：feature 类型 sprint 必须提供功能回归测试和可运行案例
 
 Quality Gate 失败使用独立的 `quality_retry_count`，不消耗 Evaluator 的 retry 预算。Evaluator 会读取 `.sprintfoundry/results/quality/quality-gate-{N}.md`，并将其纳入 Craft 评分。旧版根目录 `quality-gate-{N}.md` 仅迁移兼容读取，新文件统一写入 `.sprintfoundry/results/quality/`。
+
+Evaluator 还会按固定顺序执行强制复用审查：仓库已有实现、标准库、平台/数据库原生能力、已安装依赖，最后才是最小新增代码。重复候选只是待调查证据，不会自动判失败；如果确认存在无兼容性、安全、性能、许可、包体积或平台约束支撑的实质性重复实现，则 sprint 失败，轻微或有争议的问题只影响 Craft。Originality 只评价产品和领域决策，不奖励重复造轮子。
 
 每条 contract success criterion 还必须包含 `Automated test:` 映射，明确测试文件和执行命令。Evaluator 在功能验收前逐条执行这些命令；缺少映射、测试文件不存在或命令失败，都会直接判定该 sprint 失败。
 

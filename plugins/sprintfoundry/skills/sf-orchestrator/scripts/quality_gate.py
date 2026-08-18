@@ -19,8 +19,173 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
+
+
+DUPLICATION_DEFAULTS = {
+    "mode": "warn",
+    "min_lines": 10,
+    "min_tokens": 70,
+    "max_new_clones": 0,
+}
+
+
+def duplication_config(constitution: str, environ=None) -> dict:
+    """Read duplication policy from SPRINTFOUNDRY.md with env overrides."""
+    env = os.environ if environ is None else environ
+
+    def text_value(key: str, default: str) -> str:
+        match = re.search(rf"(?mi)^\s*{re.escape(key)}\s*:\s*([^#\n]+)", constitution)
+        return match.group(1).strip() if match else default
+
+    def int_value(env_key: str, file_key: str, default: int) -> int:
+        raw = env.get(env_key) or text_value(file_key, str(default))
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return default
+
+    mode = str(
+        env.get("SPRINTFOUNDRY_DUPLICATION_GATE")
+        or text_value("duplication_gate", DUPLICATION_DEFAULTS["mode"])
+    ).strip().lower()
+    if mode not in {"off", "warn", "fail"}:
+        mode = DUPLICATION_DEFAULTS["mode"]
+
+    return {
+        "mode": mode,
+        "min_lines": int_value(
+            "SPRINTFOUNDRY_DUPLICATION_MIN_LINES",
+            "duplication_min_lines",
+            DUPLICATION_DEFAULTS["min_lines"],
+        ),
+        "min_tokens": int_value(
+            "SPRINTFOUNDRY_DUPLICATION_MIN_TOKENS",
+            "duplication_min_tokens",
+            DUPLICATION_DEFAULTS["min_tokens"],
+        ),
+        "max_new_clones": int_value(
+            "SPRINTFOUNDRY_DUPLICATION_MAX_NEW_CLONES",
+            "duplication_max_new_clones",
+            DUPLICATION_DEFAULTS["max_new_clones"],
+        ),
+    }
+
+
+def _location_line(location: dict, key: str) -> int:
+    value = location.get(key)
+    if isinstance(value, dict):
+        value = value.get("line")
+    if value is None:
+        value = location.get(f"{key}Loc", {}).get("line")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def load_jscpd_clones(report_path: pathlib.Path) -> list:
+    """Normalize the v4/v5 JSON clone shapes used by jscpd reporters."""
+    data = json.loads(report_path.read_text(errors="ignore"))
+    raw_clones = data.get("duplicates") or data.get("clones") or []
+    clones = []
+    for raw in raw_clones:
+        first = raw.get("firstFile") or raw.get("first") or {}
+        second = raw.get("secondFile") or raw.get("second") or {}
+
+        def normalize(location: dict) -> dict:
+            return {
+                "path": str(location.get("name") or location.get("path") or ""),
+                "start": _location_line(location, "start"),
+                "end": _location_line(location, "end"),
+            }
+
+        clones.append({
+            "format": str(raw.get("format") or "unknown"),
+            "lines": int(raw.get("lines") or 0),
+            "tokens": int(raw.get("tokens") or 0),
+            "first": normalize(first),
+            "second": normalize(second),
+        })
+    return clones
+
+
+def changed_line_ranges(diff_ref: str, paths: list) -> dict:
+    """Return added/modified line ranges for each changed source file."""
+    if not paths:
+        return {}
+    if diff_ref == "ROOT":
+        cmd = ["git", "show", "--format=", "--unified=0", "HEAD", "--", *paths]
+    else:
+        cmd = ["git", "diff", "--unified=0", "--no-color", diff_ref, "--", *paths]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        return {}
+
+    ranges = {}
+    current = ""
+    for line in result.stdout.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:]
+            ranges.setdefault(current, [])
+            continue
+        match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+        if current and match:
+            start = int(match.group(1))
+            count = int(match.group(2) or "1")
+            if count:
+                ranges[current].append((start, start + count - 1))
+    return ranges
+
+
+def clones_touching_changes(clones: list, ranges: dict, project_root: pathlib.Path) -> list:
+    """Keep clone pairs whose reported span intersects this sprint's changed lines."""
+    root = project_root.resolve()
+
+    def relative(name: str) -> str:
+        path = pathlib.Path(name)
+        if path.is_absolute():
+            try:
+                path = path.resolve().relative_to(root)
+            except ValueError:
+                return ""
+        value = path.as_posix()
+        return value[2:] if value.startswith("./") else value
+
+    def intersects(location: dict) -> bool:
+        path = relative(location["path"])
+        start, end = location["start"], location["end"]
+        if not path or not start or not end:
+            return False
+        return any(start <= changed_end and end >= changed_start
+                   for changed_start, changed_end in ranges.get(path, []))
+
+    return [clone for clone in clones
+            if intersects(clone["first"]) or intersects(clone["second"])]
+
+
+def duplication_result(candidates: list, policy: dict) -> dict:
+    """Turn changed-line clone candidates into a quality-gate result."""
+    mode = policy["mode"]
+    allowed = policy["max_new_clones"]
+    passed = mode != "fail" or len(candidates) <= allowed
+    status = "pass" if not candidates or (mode == "fail" and passed) \
+        else ("warn" if mode == "warn" else "fail")
+    lines = [
+        f"Mode: {mode}; changed-line clone candidates: {len(candidates)}; "
+        f"allowed in fail mode: {allowed}.",
+        "Candidates are evidence for Evaluator reuse review, not proof of a defect.",
+    ]
+    for clone in candidates[:10]:
+        first, second = clone["first"], clone["second"]
+        lines.append(
+            f"- {first['path']}:{first['start']}-{first['end']} <-> "
+            f"{second['path']}:{second['start']}-{second['end']} "
+            f"({clone['lines']} lines, {clone['tokens']} tokens)"
+        )
+    return {"passed": passed, "status": status, "output": "\n".join(lines)}
 
 
 def main() -> int:
@@ -189,7 +354,7 @@ def run_gate(sprint_override: "int | None" = None) -> int:
     # but no test file was added or modified, FAIL. Pure docs / config / markup
     # changes are exempt (nothing behavioural to test; they have their own lint
     # gates). This runs for EVERY stack, including ones not otherwise recognised.
-    def sprint_diff_files():
+    def sprint_diff_context():
         def sh(cmd):
             code, out = run(cmd)
             return out.strip() if code == 0 else ""
@@ -218,14 +383,17 @@ def run_gate(sprint_override: "int | None" = None) -> int:
                     base = mb
                     break
         if base and base != head:
-            _, out = run(f"git diff --name-only {base}..HEAD")
+            diff_ref = f"{base}..HEAD"
+            _, out = run(f"git diff --name-only {diff_ref}")
         else:
             parent = sh("git rev-parse --verify --quiet HEAD~1 2>/dev/null")
             if parent:  # no distinct base recorded — compare against the parent commit
-                _, out = run("git diff --name-only HEAD~1..HEAD")
+                diff_ref = "HEAD~1..HEAD"
+                _, out = run(f"git diff --name-only {diff_ref}")
             else:  # parentless root commit — --root lists its files as all-added
+                diff_ref = "ROOT"
                 _, out = run("git diff-tree --root --no-commit-id --name-only -r HEAD")
-        return [f for f in out.splitlines() if f.strip()]
+        return [f for f in out.splitlines() if f.strip()], diff_ref
 
     def is_test_file(path):
         name = path.lower().rsplit("/", 1)[-1]
@@ -243,8 +411,9 @@ def run_gate(sprint_override: "int | None" = None) -> int:
         ".rb", ".php", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".kt", ".swift",
         ".scala", ".vue", ".svelte", ".dart",
     )
+    sprint_files, diff_ref = sprint_diff_context()
     changed_paths = [
-        f for f in sprint_diff_files()
+        f for f in sprint_files
         if not any(part in SKIP_DIRS for part in pathlib.Path(f).parts)
     ]
     code_changed = [
@@ -268,6 +437,77 @@ def run_gate(sprint_override: "int | None" = None) -> int:
                     + "\n  ".join(code_changed[:30])
                 ),
             }
+
+    # ── Duplication evidence (jscpd + sprint changed-line filtering) ─────────────
+    # A whole-repository percentage would punish a new sprint for historical debt.
+    # Scan the repository, then retain only clone spans that overlap lines changed
+    # by this sprint. WARN is the default; projects can opt into a hard gate in
+    # SPRINTFOUNDRY.md after calibrating generated/fixture exclusions.
+    constitution = pathlib.Path("SPRINTFOUNDRY.md").read_text(errors="ignore") \
+        if pathlib.Path("SPRINTFOUNDRY.md").exists() else ""
+    duplicate_policy = duplication_config(constitution)
+    if code_changed:
+        mode = duplicate_policy["mode"]
+        if mode == "off":
+            results["duplication"] = {
+                "passed": True,
+                "status": "skip",
+                "output": "Disabled by duplication_gate: off.",
+            }
+        else:
+            binary = "jscpd" if shutil.which("jscpd") else ""
+            if not binary and shutil.which("npx"):
+                binary = "npx --yes jscpd@5"
+
+            if not binary:
+                results["duplication"] = {
+                    "passed": mode != "fail",
+                    "status": "skip" if mode == "warn" else "fail",
+                    "output": (
+                        "jscpd is unavailable (no jscpd or npx on PATH). "
+                        f"Configured mode: {mode}."
+                    ),
+                }
+            else:
+                report_dir = pathlib.Path(".sprintfoundry/results/quality") / f"jscpd-{sprint_n}"
+                if report_dir.exists():
+                    shutil.rmtree(report_dir)
+                ignore = ",".join([
+                    "**/.git/**", "**/node_modules/**", "**/.venv/**", "**/venv/**",
+                    "**/dist/**", "**/build/**", "**/.sprintfoundry/**", "**/coverage/**",
+                    "**/vendor/**", "**/generated/**", "**/fixtures/**", "**/snapshots/**",
+                    "**/migrations/**", "**/tests/**", "**/test/**", "**/__tests__/**",
+                    "**/e2e/**", "**/examples/**",
+                ])
+                command = (
+                    f"{binary} . --reporters json --output {shlex.quote(str(report_dir))} "
+                    f"--min-lines {duplicate_policy['min_lines']} "
+                    f"--min-tokens {duplicate_policy['min_tokens']} --mode mild "
+                    f"--ignore {shlex.quote(ignore)}"
+                )
+                rc, tool_output = run(command)
+                reports = sorted(report_dir.rglob("*.json")) if report_dir.exists() else []
+                if rc != 0 or not reports:
+                    detail = tool_output[-600:] or "jscpd produced no JSON report"
+                    results["duplication"] = {
+                        "passed": mode != "fail",
+                        "status": "skip" if mode == "warn" else "fail",
+                        "output": f"Duplication scan unavailable in {mode} mode:\n{detail}",
+                    }
+                else:
+                    try:
+                        clones = load_jscpd_clones(reports[0])
+                        ranges = changed_line_ranges(diff_ref, code_changed)
+                        candidates = clones_touching_changes(clones, ranges, pathlib.Path.cwd())
+                    except (OSError, ValueError, json.JSONDecodeError) as exc:
+                        candidates = []
+                        results["duplication"] = {
+                            "passed": mode != "fail",
+                            "status": "skip" if mode == "warn" else "fail",
+                            "output": f"Could not parse jscpd report in {mode} mode: {exc}",
+                        }
+                    else:
+                        results["duplication"] = duplication_result(candidates, duplicate_policy)
 
     # ── Feature gate (SPRINTFOUNDRY §2b regression tests + §3 example) ────────────
     # Deterministic backstop for the Evaluator's semantic §2b/§3 check. For a
@@ -339,8 +579,10 @@ def run_gate(sprint_override: "int | None" = None) -> int:
     lines = [f"# Quality Gate — Sprint {sprint_n}"]
     lines.append(f"\n**Verdict: {'PASS' if passed_all else 'FAIL'}**\n")
     for tool, res in results.items():
-        icon = "✅" if res["passed"] else "❌"
-        lines.append(f"\n## {icon} {tool}\n```\n{res['output'][:800]}\n```")
+        status = res.get("status", "pass" if res["passed"] else "fail")
+        icon = {"pass": "✅", "warn": "⚠️", "skip": "➖", "fail": "❌"}[status]
+        output_limit = 4000 if tool == "duplication" else 800
+        lines.append(f"\n## {icon} {tool}\n```\n{res['output'][:output_limit]}\n```")
 
     out_dir = pathlib.Path(".sprintfoundry") / "results" / "quality"
     out_dir.mkdir(parents=True, exist_ok=True)

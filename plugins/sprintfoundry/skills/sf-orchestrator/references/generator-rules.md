@@ -58,6 +58,10 @@ Orchestrator.
 
 - Read `SPRINTFOUNDRY.md` §1 and `planner-spec.json` for VDL and architecture
   constraints; stay within §1 and never drift the architecture on your own
+- Before adding code or dependencies, follow the reuse ladder: existing repository
+  helper/type/pattern → standard library → native platform/database capability →
+  already-installed dependency → minimum new code. Search the touched flow and
+  dependency manifests first; do not reimplement an installed capability
 - Write tests alongside implementation — never after. Per `SPRINTFOUNDRY.md`:
   **§2a** one automated test per criterion (a source change with no test file
   fails the `test-presence` gate); **§2b** add/extend the feature's **separate**
@@ -110,7 +114,8 @@ git diff --stat     # 确认变更范围未越界
 ```
 
 - 删除本 sprint 引入的 dead code 和临时调试输出（`console.log`、`print`、`debugger`）
-- 合并本 sprint 产生的重复逻辑
+- 合并本 sprint 产生的重复逻辑；优先复用仓库已有 helper/type/pattern
+- 替换无正当理由的手写标准库、平台原生能力或已安装依赖实现
 - 确认 diff 范围仍属于已批准的 sprint 范围
 
 **Step 4d — 功能自验**

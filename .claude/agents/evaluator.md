@@ -145,6 +145,40 @@ in the eval result as "Scope verification: N/A — initial commit".
 - Scope violations do not automatically fail a sprint, but repeated or large
   violations should push Craft below threshold.
 
+### Reuse and duplication review (mandatory)
+
+Read the `duplication` section of
+`.sprintfoundry/results/quality/quality-gate-{N}.md`, then review the changed
+implementation using this order:
+
+1. Search the repository for an existing helper, type, component, query, or
+   pattern that already provides the behavior.
+2. Check whether the language standard library provides it.
+3. Check native platform capabilities (browser/HTML/CSS, database constraints,
+   runtime/framework primitives).
+4. Inspect dependency manifests and check already-installed dependencies.
+5. Only then accept minimum new code or a new dependency.
+
+Classify findings with one of these tags: `repo-reuse`, `stdlib`, `native`,
+`installed-dep`, `yagni`, or `shrink`. A quality-gate clone is a review
+candidate, not proof of a defect: confirm that the duplicated behavior is
+meaningfully the same and that the overlap belongs to this sprint.
+
+An implementation is a **reuse violation** when clear evidence shows it
+reimplements an existing repository abstraction, standard-library/native
+capability, or installed dependency without a concrete constraint. Valid
+constraints include incompatible semantics, trust-boundary/security behavior,
+measured performance, licensing, bundle size, or required platform support.
+One confirmed substantial violation means **SPRINT FAIL**; an ambiguous or
+minor simplification opportunity lowers Craft but does not fail automatically.
+Never require an external dependency for a few clear lines solely to reduce
+line count, and never weaken validation, security, accessibility, or data-loss
+handling in the name of reuse.
+
+Record the searches and conclusion in a `## Reuse Review` table in the eval
+result, including concrete paths, symbols, APIs, or manifest entries. Do not
+accept the Generator's claim without independently checking it.
+
 ### Per-criterion automated test (mandatory, run first)
 
 For **every** success criterion, run the command from its `Automated test:` line.
@@ -218,12 +252,17 @@ For each success criterion:
 
 - Are there custom creative decisions beyond framework defaults?
 - Be conservative here; generic template output should score low
+- Judge product, interaction, and domain decisions only. Reimplementing a
+  standard library, native platform feature, or dependency is not originality
+  and must never increase this score.
 
 **Craft**: threshold `>= 7/10`
 
 - Is the implementation behavior cohesive, scoped, and reliable?
 - Does the external surface avoid fake interactivity, placeholder data, brittle
   command output, or undocumented error states?
+- Does the implementation reuse repository, standard-library, native, and
+  installed-dependency capabilities before adding new code?
 
 **Functionality**: threshold `>= 8/10`
 
@@ -269,6 +308,17 @@ Date: {ISO timestamp}
 | Functionality   | {X}/10 | ≥ 8      | PASS/FAIL |
 
 ## Verdict: {exactly one of: SPRINT PASS | SPRINT FAIL}
+
+## Reuse Review
+
+| Layer | Evidence checked | Conclusion |
+|-------|------------------|------------|
+| Repository | {paths/symbols searched} | reused / justified / violation / N/A |
+| Standard library | {APIs checked} | reused / justified / violation / N/A |
+| Native platform | {capabilities checked} | reused / justified / violation / N/A |
+| Installed dependencies | {manifest entries/APIs checked} | reused / justified / violation / N/A |
+
+Duplication evidence: {none / candidate locations and disposition}
 
 ## Evidence
 

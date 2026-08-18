@@ -35,6 +35,7 @@ yaml、html、css 等）改动豁免——它们没有可测的行为，且各�
    Rule 2.1: QUALITY GATE  ◀── lint / type / coverage / audit
         │                       + test-presence（源码改动必须带测试）
         │                       + feature-gate（功能型 sprint 必须带 §2b 回归测试 + §3 案例）
+        │                       + duplication（只报告与本 sprint 修改行相交的 clone）
    PASS ├──────────────────▶ ④ EVALUATE (Evaluator 黑盒验证)
         │
    FAIL └──────────────────▶ Codex 修复质量问题（含补测试脚本）
@@ -134,6 +135,38 @@ Orchestrator 记录 `.sprintfoundry/results/quality/quality-gate-N.md` 为"栈�
 **不因此失败**，但 Evaluator 须在 Craft 评分中注记"缺少静态分析覆盖"并适当扣分。
 注意：即使栈未识别，下面的 **test-presence** 门禁仍然生效。
 
+### duplication（重复代码证据，对所有代码栈生效）
+
+质量门禁使用 `jscpd` 扫描仓库，但不会用整个仓库的重复率惩罚当前 sprint。
+脚本先依据 sprint fence/base commit 解析 Git 修改行，再只保留与这些修改行相交的
+clone pair。结果是交给 Evaluator 做复用审查的**候选证据**，不是缺陷的自动证明。
+
+优先使用 PATH 上已有的 `jscpd`；否则使用 `npx --yes jscpd@5`。默认忽略依赖、构建产物、
+生成代码、fixtures、snapshots、migrations、测试和 examples，减少结构性重复误报。
+
+在 `SPRINTFOUNDRY.md` 中可配置：
+
+```text
+duplication_gate: warn
+duplication_min_lines: 10
+duplication_min_tokens: 70
+duplication_max_new_clones: 0
+```
+
+| 模式 | 行为 |
+|------|------|
+| `warn`（默认） | 有候选时写 `⚠️ duplication`，Quality Gate 仍可 PASS；Evaluator 必须逐项裁决 |
+| `fail` | 候选数超过 `duplication_max_new_clones` 时 Quality Gate FAIL；工具缺失或报告不可解析时 fail-closed |
+| `off` | 写入跳过记录，不运行重复检测 |
+
+对应环境变量为 `SPRINTFOUNDRY_DUPLICATION_GATE`、
+`SPRINTFOUNDRY_DUPLICATION_MIN_LINES`、`SPRINTFOUNDRY_DUPLICATION_MIN_TOKENS` 和
+`SPRINTFOUNDRY_DUPLICATION_MAX_NEW_CLONES`，环境变量优先于项目文件。
+
+Evaluator 对候选 pair 检查行为是否真正相同，并按以下顺序做复用审查：仓库已有实现 →
+标准库 → 平台/数据库原生能力 → 已安装依赖 → 最小新增代码。只有有明确证据且缺少合理约束时，
+才判定为复用违规。
+
 ### test-presence（测试脚本存在性门禁，对所有 sprint 强制）
 
 | 项 | 说明 |
@@ -222,7 +255,7 @@ uv run --python <project-python-version> --with pip-audit pip-audit --desc
 
 **Verdict: PASS / FAIL**
 
-## ✅/❌ eslint
+## ✅/⚠️/➖/❌ eslint
 ```
 {工具输出，最多 800 字符}
 ```
@@ -299,8 +332,10 @@ cat .sprintfoundry/results/quality/quality-gate-{N}.md 2>/dev/null \
 | 质量门禁状态 | 对 Craft 评分的影响 |
 |------------|-------------------|
 | PASS（所有工具通过） | 无额外扣分 |
+| PASS（duplication 为 WARN） | Evaluator 必须裁决 clone 候选；确认的轻微问题扣 Craft，明确且实质性的复用违规判 FAIL |
 | PASS（部分工具跳过，栈未识别） | 记录"缺少静态分析"，Craft 上限降为 8/10 |
 | FAIL（不应发生，但若 Orchestrator 跳过了质量门禁） | Craft 直接 ≤ 5/10，注明"未经质量门禁" |
 
-Evaluator **不重新运行**静态分析工具——它信任 quality gate 结果文件，
-只将其作为 Craft 评分的上下文输入。黑盒功能验证保持不变。
+Evaluator **不重新运行**静态分析工具——它信任 quality gate 的扫描结果，但必须独立
+检查 duplication 候选和复用阶梯。`repo-reuse`、`stdlib`、`native`、`installed-dep`、
+`yagni`、`shrink` finding 必须带具体路径、symbol、API 或 manifest 证据。黑盒功能验证保持不变。

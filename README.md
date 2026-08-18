@@ -249,10 +249,13 @@ Depending on the detected stack, it can run:
 - coverage thresholds
 - dependency security audits (`npm audit`, `pip-audit`)
 - frontend asset checks triggered by file presence rather than stack keywords, so plain static sites are covered too: htmlhint for HTML, stylelint for CSS, and ESLint for vanilla JavaScript when no framework branch already linted it
+- diff-aware duplication evidence via `jscpd`: only clone spans intersecting this sprint's changed lines are reported, with configurable `warn`, `fail`, and `off` modes
 - a stack-independent `test-presence` check that rejects application source changes without an added or updated test file
 - a `feature-gate` check that requires feature regression tests and runnable examples for feature-type sprints
 
 Quality gate failures use their own `quality_retry_count`; they do not consume the Evaluator retry budget. The Evaluator reads `.sprintfoundry/results/quality/quality-gate-{N}.md` and uses it when scoring Craft. Legacy root-level `quality-gate-{N}.md` files may be read during migration, but new quality gate files belong under `.sprintfoundry/results/quality/`.
+
+The Evaluator also performs a mandatory reuse review in this order: existing repository implementation, standard library, native platform/database capability, installed dependency, then minimum new code. Duplication candidates are evidence to investigate rather than automatic failures. Confirmed substantial reimplementation without a concrete compatibility, security, performance, licensing, bundle-size, or platform constraint fails the sprint; minor or ambiguous opportunities affect Craft. Originality scores product and domain decisions, never reinvention of an existing capability.
 
 Every contract success criterion must also include an `Automated test:` mapping with a concrete test file and command. During CHECK, the Evaluator runs each mapped command before functional verification and fails the sprint when a mapping is missing, its test file does not exist, or the command fails.
 

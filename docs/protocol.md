@@ -567,6 +567,16 @@ or behaviour outside the contracted scope as a Craft defect in
 `.sprintfoundry/results/eval/eval-result-{N}.md`. Scope violations do not auto-fail a sprint but reduce the
 Craft score.
 
+Before functional evaluation, perform a reuse review. Read the quality gate's
+diff-aware `duplication` candidates, then check the changed flow in order:
+existing repository implementation, standard library, native platform/database
+capability, installed dependency, and only then minimum new code. Record concrete
+paths, symbols, APIs, and manifest entries under `## Reuse Review`. A confirmed
+substantial reimplementation without a compatibility, security, measured
+performance, licensing, bundle-size, or platform constraint fails the sprint;
+ambiguous or minor opportunities reduce Craft. Originality measures product and
+domain decisions and never rewards reimplementing an existing capability.
+
 Execute each test step through the configured verification surface:
 
 - `browser`: use Playwright MCP and capture screenshot/visible-state evidence.

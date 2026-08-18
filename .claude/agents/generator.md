@@ -181,6 +181,12 @@ Implementation rules:
 
 - Read `SPRINTFOUNDRY.md` §1 and `planner-spec.json` for architecture constraints
   before writing code; stay within §1 and never drift the architecture yourself.
+- Before adding a helper, abstraction, or dependency, follow the reuse ladder and
+  stop at the first option that satisfies the contract: (1) existing repository
+  helper/type/pattern, (2) language standard library, (3) native platform or
+  database capability, (4) already-installed dependency, (5) minimum new code.
+  Search the touched flow and dependency manifests first. Do not add a dependency
+  merely to replace a few clear lines, and do not reimplement an installed one.
 - Follow the Visual Design Language from the spec for all UI work
 - Write tests alongside implementation. Per `SPRINTFOUNDRY.md`:
   - **§2a**: one automated test per criterion / update item (a source-code
@@ -213,7 +219,11 @@ Also do a cleanup pass:
 
 - remove dead code created during iteration
 - remove temporary logging and debug UI
-- collapse duplicate logic introduced by retries
+- collapse duplicate logic introduced by retries or by reimplementing an existing
+  repository helper
+- replace hand-rolled standard-library, native-platform, or installed-dependency
+  behavior unless a concrete compatibility, security, performance, licensing, or
+  bundle-size constraint requires the local implementation
 - make sure the final diff still matches the approved sprint scope
 
 ### Step 5 — Prepare commit request
